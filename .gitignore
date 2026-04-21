@@ -1,0 +1,86 @@
+# Dependencies
+node_modules/
+/.pnp
+.pnp.js
+
+# Environment
+.env
+.env.local
+.env.*.local
+*.env
+
+# Build
+dist/
+build/
+.next
+out/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+*.sublime-project
+*.sublime-workspace
+
+# OS
+.DS_Store
+Thumbs.db
+.directory
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Runtime data
+pids/
+*.pid
+*.seed
+
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+!terraform.tfvars.example
+.terraform.lock.hcl
+
+# Database
+*.sql.backup
+*.pgsql
+*.db
+*.sqlite
+
+# Testing
+coverage/
+.nyc_output/
+
+# Misc
+*.bak
+*.tmp
+temp/
+*.swp
+
+# PlatformIO
+.pio/
+.pioenvs/
+.piolibdeps/
+
+# WebStorm
+.idea/
+
+# VSCode
+.vscode/
+*.code-workspace
+
+# Serial Monitor output
+*.txt
+
+# OS files
+.DS_Store
+.env.production
+.env.production.local

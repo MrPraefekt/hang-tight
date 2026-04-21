@@ -1,0 +1,34 @@
+{
+  "name": "hangboard-backend",
+  "version": "1.0.0",
+  "description": "Hangboard Force Measurement System - Backend",
+  "buildCommand": "npm install",
+  "startCommand": "npm start",
+  "routes": [
+    {
+      "src": "/(.*)",
+      "dest": "/server.js"
+    }
+  ],
+  "env": [
+    {
+      "key": "DATABASE_URL",
+      "value": "@database_url"
+    },
+    {
+      "key": "PORT",
+      "value": "3001"
+    }
+  ],
+  "headers": [
+    {
+      "source": "/api/(.*)",
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "no-cache"
+        }
+      ]
+    }
+  ]
+}
