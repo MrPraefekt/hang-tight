@@ -10,7 +10,7 @@
 # =============================================================================
 set -euo pipefail
 
-REPO_URL="https://github.com/mrpraefekt/hang-tight.git"
+REPO_URL="git@github.com:mrpraefekt/hang-tight.git"
 APP_DIR="/opt/hang-tight"
 PI_USER="$(whoami)"
 STEP=""

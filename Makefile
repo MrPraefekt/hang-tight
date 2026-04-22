@@ -1,150 +1,95 @@
-# Hangboard Force Measurement — Development & Deployment
+# Hangboard Force Measurement — Makefile
 #
-# Usage:
-#   make dev          — run backend + frontend locally (development)
-#   make build        — build frontend into backend/public/
-#   make deploy       — push to git, Pi pulls via deploy script
-#   make seed         — insert sample data into local DB
-#   make clean        — remove build artifacts
+# Local dev:
+#   make install      — install all npm deps
+#   make dev          — run backend + frontend (hot-reload)
+#   make build        — production build
+#   make seed         — seed local DB with sample data
 #
-# The Pi pulls code from GitHub. See deploy/setup-pi.sh for initial setup.
-# For SSH-based commands, configure PI_HOST below.
+# Deploy to Pi:
+#   make ship         — commit, push, Pi auto-deploys in ~15s
+#   make deploy       — push + SSH trigger (immediate)
+#   make logs         — tail Pi logs
+#   make status       — check Pi service
+#
+# First-time Pi setup:
+#   SSH into Pi, then run:
+#   sudo apt-get update && sudo apt-get install -y git && \
+#   sudo mkdir -p /opt/hang-tight && sudo chown $(whoami):$(whoami) /opt/hang-tight && \
+#   git clone git@github.com:mrpraefekt/hang-tight.git /opt/hang-tight && \
+#   bash /opt/hang-tight/deploy/setup-pi.sh
 
 PI_HOST  ?= hang-tight.local
 PI_USER  ?= hang-tight
-PI_PATH  ?= /opt/hang-tight
 PI_SSH    = $(PI_USER)@$(PI_HOST)
+PI_PATH   = /opt/hang-tight
 
-# ============================================================================
-# Local development
-# ============================================================================
+# ── Local dev ────────────────────────────────────────────────────────────────
 
-.PHONY: dev
+.PHONY: dev install build seed clean
+
 dev:
-	@echo "Starting backend (nodemon) + frontend (vite) in parallel..."
 	@trap 'kill 0' EXIT; \
 		cd backend && npx nodemon server.js & \
 		cd frontend && npx vite --host & \
 		wait
 
-.PHONY: install
 install:
 	cd backend && npm install
 	cd frontend && npm install
 
-# ============================================================================
-# Build
-# ============================================================================
-
-.PHONY: build
 build:
-	@echo "Building frontend..."
 	cd frontend && npm run build
-	@echo "Copying build to backend/public/..."
 	rm -rf backend/public
 	cp -r frontend/dist backend/public
-	@echo "Build complete. Run 'cd backend && node server.js' to test."
 
-# ============================================================================
-# Deploy to Raspberry Pi (git-based)
-# ============================================================================
+seed:
+	cd backend && node scripts/init-db.js --seed
 
-# Push to GitHub, then trigger deploy on Pi via SSH
-.PHONY: deploy
-deploy:
-	@echo "Pushing to GitHub..."
-	git push origin main
-	@echo "Triggering deploy on Pi..."
-	ssh $(PI_SSH) "$(PI_PATH)/deploy/deploy.sh"
-	@echo "✓ Deployed. Open http://$(PI_HOST):3001"
+clean:
+	rm -rf backend/public frontend/dist data/*.csv
 
-# ============================================================================
-# Pull data from Pi to local machine
-# ============================================================================
+# ── Deploy ───────────────────────────────────────────────────────────────────
 
-.PHONY: pull-data
-pull-data:
-	@echo "Pulling database from $(PI_SSH)..."
-	@mkdir -p data
-	rsync -azP \
-		$(PI_SSH):$(PI_PATH)/data/hangboard.db \
-		data/hangboard-pi.db
-	@echo "✓ Database saved to data/hangboard-pi.db"
-	@echo ""
-	@echo "Quick stats:"
-	@sqlite3 data/hangboard-pi.db "SELECT 'Sessions: ' || COUNT(*) FROM sessions;"
-	@sqlite3 data/hangboard-pi.db "SELECT 'Samples:  ' || COUNT(*) FROM samples;"
-	@sqlite3 data/hangboard-pi.db "SELECT 'DB size:  ' || (page_count * page_size) / 1024 || ' KB' FROM pragma_page_count(), pragma_page_size();"
+.PHONY: ship deploy
 
-# Export to CSV for analysis in Python/Jupyter/etc.
-.PHONY: pull-csv
-pull-csv: pull-data
-	@echo "Exporting to CSV..."
-	@mkdir -p data
-	sqlite3 -header -csv data/hangboard-pi.db \
-		"SELECT s.id as sample_id, s.session_id, s.timestamp, s.raw, s.force, \
-		 ses.start_time, ses.end_time \
-		 FROM samples s JOIN sessions ses ON s.session_id = ses.id \
-		 ORDER BY s.session_id, s.timestamp" \
-		> data/samples.csv
-	sqlite3 -header -csv data/hangboard-pi.db \
-		"SELECT * FROM sessions ORDER BY start_time" \
-		> data/sessions.csv
-	sqlite3 -header -csv data/hangboard-pi.db \
-		"SELECT * FROM calibration ORDER BY created_at" \
-		> data/calibration.csv
-	@echo "✓ Exported to data/samples.csv, data/sessions.csv, data/calibration.csv"
-	@wc -l data/*.csv
-
-# ============================================================================
-# Pi setup (run once on fresh Pi — or use deploy/setup-pi.sh directly)
-# ============================================================================
-
-.PHONY: pi-setup
-pi-setup:
-	@echo "Running setup script on Pi..."
-	ssh $(PI_SSH) "bash $(PI_PATH)/deploy/setup-pi.sh"
-	@echo "✓ Pi ready."
-
-# First-time setup: clone repo on Pi then run setup (use when /opt/hang-tight doesn't exist yet)
-.PHONY: pi-bootstrap
-pi-bootstrap:
-	@echo "Bootstrapping Pi from scratch..."
-	ssh $(PI_SSH) "sudo apt-get update -qq && sudo apt-get install -y git && sudo mkdir -p $(PI_PATH) && sudo chown -R \$$(whoami):\$$(whoami) $(PI_PATH) && git clone https://github.com/mrpraefekt/hang-tight.git $(PI_PATH) && bash $(PI_PATH)/deploy/setup-pi.sh"
-	@echo "✓ Pi ready."
-
-# ============================================================================
-# Fast iteration: commit + push (Pi auto-deploys via cron)
-# ============================================================================
-
-.PHONY: ship
 ship:
 	@git add -A
 	@git diff --cached --stat
 	@read -p "Commit message: " msg && git commit -m "$$msg"
 	git push origin main
-	@echo "✓ Pushed. Pi will auto-deploy within ~15 seconds."
-	@echo "  Browser will auto-reload when build is ready."
+	@echo "✓ Pushed. Pi auto-deploys in ~15s."
 
-# ============================================================================
-# Utilities
-# ============================================================================
+deploy:
+	git push origin main
+	ssh $(PI_SSH) "$(PI_PATH)/deploy/deploy.sh"
+	@echo "✓ Deployed → http://$(PI_HOST):3001"
 
-.PHONY: logs
+# ── Pi utilities ─────────────────────────────────────────────────────────────
+
+.PHONY: logs status pull-data pull-csv
+
 logs:
 	ssh $(PI_SSH) "sudo journalctl -u hangboard -f --no-pager"
 
-.PHONY: status
 status:
 	ssh $(PI_SSH) "sudo systemctl status hangboard"
 
-.PHONY: seed
-seed:
-	@echo "Seeding local database with sample data..."
-	cd backend && node scripts/init-db.js --seed
+pull-data:
+	@mkdir -p data
+	rsync -azP $(PI_SSH):$(PI_PATH)/backend/data/hangboard.db data/hangboard-pi.db
+	@sqlite3 data/hangboard-pi.db "SELECT 'Sessions: ' || COUNT(*) FROM sessions;"
+	@sqlite3 data/hangboard-pi.db "SELECT 'Samples:  ' || COUNT(*) FROM samples;"
 
-.PHONY: clean
-clean:
-	rm -rf backend/public
-	rm -rf frontend/dist
-	rm -rf data/*.csv
+pull-csv: pull-data
+	@mkdir -p data
+	sqlite3 -header -csv data/hangboard-pi.db \
+		"SELECT s.id, s.session_id, s.timestamp, s.raw, s.force, \
+		 ses.start_time, ses.end_time \
+		 FROM samples s JOIN sessions ses ON s.session_id = ses.id \
+		 ORDER BY s.session_id, s.timestamp" > data/samples.csv
+	sqlite3 -header -csv data/hangboard-pi.db \
+		"SELECT * FROM sessions ORDER BY start_time" > data/sessions.csv
+	sqlite3 -header -csv data/hangboard-pi.db \
+		"SELECT * FROM calibration ORDER BY created_at" > data/calibration.csv
+	@wc -l data/*.csv
