@@ -68,17 +68,20 @@ sudo sh -c 'echo "registry=https://registry.npmjs.org/" > /etc/npmrc' 2>/dev/nul
 # =============================================================================
 STEP="Clone repository"
 
-if [ -d "$APP_DIR/.git" ]; then
-  echo "[✓] Repo already cloned at $APP_DIR"
-  cd "$APP_DIR"
-  git fetch origin
-  git reset --hard origin/main
-else
-  echo "[4/6] Cloning repository..."
-  sudo mkdir -p "$APP_DIR"
-  sudo chown -R "$PI_USER:$PI_USER" "$APP_DIR"
-  git clone "$REPO_URL" "$APP_DIR"
+echo "[4/6] Setting up repository..."
+if [ -d "$APP_DIR" ]; then
+  echo "      Removing existing installation..."
+  # Preserve database if it exists
+  if [ -f "$APP_DIR/backend/data/hangboard.db" ]; then
+    cp "$APP_DIR/backend/data/hangboard.db" /tmp/hangboard.db.bak
+    echo "      (backed up existing database to /tmp)"
+  fi
+  sudo rm -rf "$APP_DIR"
 fi
+
+sudo mkdir -p "$APP_DIR"
+sudo chown -R "$PI_USER:$PI_USER" "$APP_DIR"
+git clone "$REPO_URL" "$APP_DIR"
 
 # Ensure ownership is correct (handles re-runs after sudo operations)
 sudo chown -R "$PI_USER:$PI_USER" "$APP_DIR"

@@ -12,12 +12,9 @@
 #   make logs         — tail Pi logs
 #   make status       — check Pi service
 #
-# First-time Pi setup:
-#   SSH into Pi, then run:
-#   sudo apt-get update && sudo apt-get install -y git && \
-#   sudo mkdir -p /opt/hang-tight && sudo chown $(whoami):$(whoami) /opt/hang-tight && \
-#   git clone git@github.com:mrpraefekt/hang-tight.git /opt/hang-tight && \
-#   bash /opt/hang-tight/deploy/setup-pi.sh
+# First-time Pi setup (SSH into Pi, then run): \
+sudo apt-get update && sudo apt-get install -y git curl && \
+curl -fsSL https://raw.githubusercontent.com/mrpraefekt/hang-tight/main/deploy/setup-pi.sh | bash
 
 PI_HOST  ?= hang-tight.local
 PI_USER  ?= hang-tight
