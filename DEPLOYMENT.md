@@ -33,12 +33,15 @@ Dev Machine          GitHub              Raspberry Pi
 ### Steps
 
 1. **Connect to the Pi** — plug in keyboard/monitor, or SSH from a Windows machine:
+
    ```
    ssh pi@<pi-ip-address>
    ```
+
    (Default password is `raspberry` — change it with `passwd`)
 
 2. **Run the setup script**:
+
    ```bash
    curl -fsSL https://raw.githubusercontent.com/mrpraefekt/hang-tight/main/deploy/setup-pi.sh | bash
    ```
@@ -52,6 +55,7 @@ Dev Machine          GitHub              Raspberry Pi
    - Set up and start the systemd service
 
 3. **Verify it's running**:
+
    ```bash
    sudo systemctl status hangboard
    curl http://localhost:3001/health
@@ -93,6 +97,7 @@ crontab -e
 ```
 
 Add this line:
+
 ```
 */2 * * * * cd /opt/hang-tight && git fetch origin --quiet && [ "$(git rev-parse HEAD)" != "$(git rev-parse origin/main)" ] && ./deploy/deploy.sh >> /tmp/hang-tight-deploy.log 2>&1
 ```
@@ -114,6 +119,7 @@ build_flags =
 ```
 
 Build and upload:
+
 ```bash
 cd firmware && pio run -t upload -e esp32
 ```
@@ -169,11 +175,13 @@ scp pi@<pi-ip>:/opt/hang-tight/backend/data/hangboard.db ./backup.db
 ## Finding the Pi's IP Address
 
 On the Pi:
+
 ```bash
 hostname -I
 ```
 
 Or from another device on the same network:
+
 ```bash
 ping raspberrypi.local       # default hostname
 ping hang-tight.local        # if you renamed it
@@ -185,9 +193,9 @@ ping hang-tight.local        # if you renamed it
 
 See [TROUBLESHOOTING.md](TROUBLESHOOTING.md) for common issues.
 
-| Problem | Fix |
-|---------|-----|
-| Service won't start | `sudo journalctl -u hangboard -n 50` to check logs |
-| `git pull` fails | Check internet: `ping github.com` |
+| Problem                 | Fix                                                              |
+| ----------------------- | ---------------------------------------------------------------- |
+| Service won't start     | `sudo journalctl -u hangboard -n 50` to check logs               |
+| `git pull` fails        | Check internet: `ping github.com`                                |
 | Port 3001 not reachable | Check firewall: `sudo ufw status`, or just `sudo ufw allow 3001` |
-| Permission denied | `sudo chown -R pi:pi /opt/hang-tight` |
+| Permission denied       | `sudo chown -R pi:pi /opt/hang-tight`                            |
