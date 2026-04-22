@@ -1,163 +1,77 @@
-# Quick Start Commands
+# Quick Start
 
-## One-Line Setup (assumes PostgreSQL running locally)
-
-```bash
-# Backend
-cd backend && npm install && cp .env.example .env && npm run dev
-
-# Frontend (new terminal)
-cd frontend && npm install && cp .env.example .env && npm run dev
-
-# Frontend available at http://localhost:3000
-```
-
-## Docker Setup (requires Docker)
+## Setup & Run (3 commands)
 
 ```bash
-# Start PostgreSQL
-docker run --name hangboard-db \
-  -e POSTGRES_PASSWORD=postgres \
-  -e POSTGRES_DB=hangboard \
-  -p 5432:5432 \
-  postgres:15
-
-# Initialize database
-docker exec hangboard-db psql -U postgres -d hangboard -f /path/to/001_init.sql
-docker exec hangboard-db psql -U postgres -d hangboard -f /path/to/002_seed_data.sql
-
-# Backend
-cd backend
-npm install
-cp .env.example .env
-# Edit .env: DATABASE_URL=postgresql://postgres:postgres@localhost:5432/hangboard
-npm run dev
-
-# Frontend
-cd frontend
-npm install
-cp .env.example .env
-npm run dev
+make install          # install dependencies
+make seed             # create database with sample data
+make dev              # start backend + frontend
 ```
+
+Open http://localhost:5173 and use **Simulation** panel to test.
+
+---
 
 ## Useful Commands
 
-### Backend
-```bash
-cd backend
-npm run dev      # Start with auto-reload
-npm start        # Start production
-npm test         # Run tests (if configured)
-```
+### Development
 
-### Frontend
 ```bash
-cd frontend
-npm run dev      # Start dev server
-npm run build    # Build for production
-npm run preview  # Preview production build
-npm run lint     # Check code quality
-```
-
-### Firmware
-```bash
-cd firmware
-pio run           # Build
-pio run -t upload # Upload to board
-pio device monitor # View serial output
-pio project list  # List projects
+make dev              # backend (nodemon) + frontend (vite) in parallel
+make build            # build frontend into backend/public/
+make clean            # remove build artifacts
 ```
 
 ### Database
+
 ```bash
-# PostgreSQL
-psql -U user -d hangboard
-
-# Show tables
-\dt
-
-# Show sample data
-SELECT * FROM sessions;
-SELECT * FROM samples LIMIT 10;
-SELECT * FROM calibration;
-
-# Backup
-pg_dump hangboard > backup.sql
-
-# Restore
-psql hangboard < backup.sql
+make seed             # reset and seed SQLite database
+sqlite3 backend/data/hangboard.db "SELECT * FROM sessions;"
 ```
 
-### Infrastructure
+### Deployment (Raspberry Pi)
+
 ```bash
-cd infra
-terraform init      # Initialize
-terraform plan      # Preview changes
-terraform apply     # Apply changes
-terraform destroy   # Destroy resources
-terraform output    # Show outputs
+make pi-setup         # one-time Pi setup (Node.js, systemd)
+make deploy           # build + rsync + restart service
+make deploy-quick     # rsync only (skip npm install on Pi)
+make logs             # tail Pi service logs
+make status           # check Pi service status
 ```
 
-## Testing Endpoints
+### Data Export
 
 ```bash
-# API health
+make pull-data        # copy Pi database to local
+make pull-csv         # export to CSV files
+```
+
+### Firmware
+
+```bash
+cd firmware
+pio run -t upload     # build and upload to ESP32
+pio device monitor    # serial output
+```
+
+### API Testing
+
+```bash
 curl http://localhost:3001/health
-
-# Get calibration
-curl http://localhost:3001/calibration
-
-# Start session
-curl -X POST http://localhost:3001/session/start
-
-# Get sessions
 curl http://localhost:3001/sessions
-
-# WebSocket test
-wscat -c ws://localhost:3001
+curl -X POST http://localhost:3001/session/start
+curl -X POST http://localhost:3001/session/stop
+curl -X POST http://localhost:3001/simulate/start \
+  -H "Content-Type: application/json" -d '{"session_id": 1}'
 ```
 
-## Development Tips
-
-1. **Hot Reload**: Frontend auto-reloads on file changes
-2. **API Testing**: Use Postman or Insomnia for REST calls
-3. **Database**: Use DBeaver or pgAdmin for GUI management
-4. **WebSocket**: Use wscat for command-line testing
-5. **Logs**: Check browser console (F12) for frontend issues
-
-## Troubleshooting
-
-**Can't connect to database**:
-```bash
-psql -U postgres -h localhost
-# If fails, ensure PostgreSQL is running
-```
-
-**Port already in use**:
-```bash
-# Find process
-lsof -i :3001
-# Kill process
-kill -9 <PID>
-```
-
-**WebSocket errors**:
-```bash
-# Check backend logs
-npm run dev
-# Look for "WebSocket connected" messages
-```
-
-**Frontend not connecting**:
-```bash
-# Check browser console
-# Verify VITE_WS_URL environment variable
-# Check backend firewall/CORS settings
-```
+---
 
 ## Documentation
 
-- [README.md](README.md) - Project overview
-- [SETUP.md](SETUP.md) - Detailed setup guide
-- [DEPLOYMENT.md](DEPLOYMENT.md) - Production deployment
-- [API.md](API.md) - API reference
+- [README.md](README.md) — Project overview
+- [SETUP.md](SETUP.md) — Detailed dev setup
+- [DEPLOYMENT.md](DEPLOYMENT.md) — Raspberry Pi deployment
+- [API.md](API.md) — API reference
+- [ARCHITECTURE.md](ARCHITECTURE.md) — System design
+- [TROUBLESHOOTING.md](TROUBLESHOOTING.md) — Fixing problems

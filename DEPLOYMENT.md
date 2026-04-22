@@ -1,544 +1,175 @@
-# Production Deployment Guide
+# Deployment Guide
 
-Complete guide for deploying the Hangboard system to production.
+This system is designed to run on a **Raspberry Pi** on your local network. The backend serves both the API and the built React frontend as static files.
 
-## Architecture Overview
+## Architecture
 
 ```
-┌─────────────────────────────────────────┐
-│          Internet Users                 │
-└────────────┬──────────────────┬─────────┘
-             │                  │
-       HTTPS │                  │ HTTPS
-             ▼                  ▼
-        ┌────────────┐    ┌──────────────┐
-        │   Vercel   │    │   Railway    │
-        │ (Frontend) │    │  (Backend)   │
-        └────────────┘    └──────────────┘
-             │                  │
-             │  WebSocket       │
-             │  Connection      │
-             └────────┬─────────┘
-                      │
-                      │ SSL/TLS
-                      ▼
-              ┌────────────────┐
-              │   Supabase     │
-              │   PostgreSQL   │
-              └────────────────┘
+Development Machine                  Raspberry Pi
+┌────────────────┐    rsync         ┌────────────────────────┐
+│ make build     │ ────────────►   │ /opt/hang-tight/       │
+│ make deploy    │                  │   server.js            │
+└────────────────┘                  │   public/ (React)      │
+                                    │   data/  (SQLite DB)   │
+                                    │                        │
+                                    │ systemd: hangboard     │
+                                    │ http://<pi-ip>:3001    │
+                                    └────────────────────────┘
 ```
+
+---
 
 ## Prerequisites
 
-- GitHub account
-- Railway account (railway.app)
-- Vercel account (vercel.com)
-- Supabase account (supabase.com)
-- Terraform installed locally
-- Domain name (optional, uses *.vercel.app by default)
+- Raspberry Pi (any model with WiFi or Ethernet)
+- Raspberry Pi OS (Lite is fine)
+- SSH access to the Pi
+- Your dev machine on the same network
 
-## Phase 1: Infrastructure Setup (Terraform)
+---
 
-### 1. Supabase Project
+## Phase 1: One-Time Pi Setup
 
-```bash
-# Navigate to infrastructure directory
-cd infra
-
-# Copy example variables
-cp terraform.tfvars.example terraform.tfvars
-```
-
-Edit `terraform.tfvars`:
-```hcl
-supabase_access_token = "your-supabase-token"
-organization_id       = "your-org-id"
-db_password          = "secure_password_min_16_chars"
-project_name         = "hangboard"
-environment          = "prod"
-region               = "us-east-1"
-enable_replication   = true
-```
-
-Get tokens from [Supabase Dashboard](https://app.supabase.com):
-1. Settings → API
-2. Copy `service_role` key for access token
-3. Settings → Organization → Copy org ID
-
-### 2. Initialize Terraform
+Configure `PI_HOST` and `PI_USER` in the Makefile (or pass as env vars):
 
 ```bash
-terraform init
-
-# Review planned changes
-terraform plan
-
-# Apply infrastructure
-terraform apply
+make pi-setup PI_HOST=192.168.1.50 PI_USER=pi
 ```
 
-Save the output values:
-- `database_url`
-- `backend_api_key`
-- `frontend_api_key`
+This will:
 
-### 3. Initialize Database
+1. Install Node.js 20 on the Pi
+2. Create `/opt/hang-tight/` directory
+3. Copy the `hangboard.service` systemd unit
+4. Enable the service
+
+### Manual Setup (if you prefer)
 
 ```bash
-# Get DATABASE_URL from terraform output
-export DATABASE_URL="postgresql://..."
+# On the Pi:
+curl -fsSL https://deb.nodesource.com/setup_20.x | sudo bash -
+sudo apt-get install -y nodejs
+sudo mkdir -p /opt/hang-tight/data
+sudo chown -R pi:pi /opt/hang-tight
 
-# Run migrations
-psql "$DATABASE_URL" -f migrations/001_init.sql
-psql "$DATABASE_URL" -f migrations/002_seed_data.sql
-
-# Verify schema
-psql "$DATABASE_URL" -c "\dt"
+# Copy systemd service
+sudo cp deploy/hangboard.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable hangboard
 ```
 
-## Phase 2: Backend Deployment (Railway)
+---
 
-### 1. Prepare Repository
+## Phase 2: Deploy
 
 ```bash
-cd backend
-
-# Create .railwayignore (optional)
-cat > .railwayignore << EOF
-.git
-.env.local
-.env.*.local
-node_modules
-dist
-build
-EOF
+make deploy
 ```
 
-### 2. Connect to Railway
+This will:
+
+1. Build the frontend (`npm run build` → `backend/public/`)
+2. rsync the backend (excluding `node_modules`, `.env`, `*.db`) to the Pi
+3. Run `npm install --production` on the Pi
+4. Restart the `hangboard` systemd service
+
+After deploy, open: `http://<pi-ip>:3001`
+
+### Quick Deploy (skip npm install)
 
 ```bash
-# Install Railway CLI
-npm install -g @railway/cli
-
-# Login
-railway login
-
-# Create new service
-railway init
-
-# Link to repository
-railway link
+make deploy-quick
 ```
 
-### 3. Configure Environment Variables
+Use this for code-only changes when dependencies haven't changed.
 
-In Railway Dashboard:
+---
 
-1. Go to your project → Backend service
-2. Variables → New Variable
-3. Add:
+## Phase 3: ESP32 Configuration
 
-| Key | Value |
-|-----|-------|
-| `DATABASE_URL` | From Terraform output |
-| `PORT` | `3001` |
-| `NODE_ENV` | `production` |
-| `CORS_ORIGIN` | `https://your-frontend.vercel.app` |
-
-### 4. Deploy
-
-```bash
-# Push to trigger deploy
-git push origin main
-
-# Or deploy manually
-railway deploy
-```
-
-Get backend URL from Railway Dashboard (e.g., `https://backend-prod.railway.app`)
-
-### 5. Verify Backend
-
-```bash
-# Health check
-curl https://your-backend.railway.app/health
-
-# Get API info
-curl https://your-backend.railway.app/
-```
-
-## Phase 3: Frontend Deployment (Vercel)
-
-### 1. Prepare Repository
-
-```bash
-cd frontend
-
-# Create .vercelignore
-cat > .vercelignore << EOF
-.git
-.env.local
-.env.*.local
-node_modules
-.next
-dist
-build
-EOF
-```
-
-### 2. Connect to Vercel
-
-```bash
-# Install Vercel CLI
-npm install -g vercel
-
-# Deploy
-vercel
-```
-
-Follow prompts:
-- Link to GitHub repo
-- Select `frontend` as root directory
-- Confirm project settings
-
-### 3. Configure Environment Variables
-
-In Vercel Dashboard:
-
-1. Go to Settings → Environment Variables
-2. Add new variables:
-
-| Key | Value |
-|-----|-------|
-| `VITE_API_URL` | `https://your-backend.railway.app` |
-| `VITE_WS_URL` | `ws://your-backend.railway.app` |
-
-### 4. Deploy Production Build
-
-```bash
-# Trigger production deploy
-vercel --prod
-```
-
-Get frontend URL from Vercel Dashboard (e.g., `https://hangboard.vercel.app`)
-
-### 5. Verify Frontend
-
-Open `https://hangboard.vercel.app` and verify:
-- Backend connection status
-- Simulation works with test data
-- UI is responsive
-
-## Phase 4: Hardware Deployment (ESP32)
-
-### 1. Update Firmware Configuration
-
-Edit `firmware/platformio.ini`:
+Update `firmware/platformio.ini` with the Pi's IP:
 
 ```ini
 build_flags =
     -D WIFI_SSID="YourSSID"
     -D WIFI_PASSWORD="YourPassword"
-    -D WS_SERVER="your-backend.railway.app"
-    -D WS_PORT=80
-    -D CORE_DEBUG_LEVEL=1
+    -D WS_SERVER="192.168.1.50"
+    -D WS_PORT=3001
 ```
 
-### 2. Build and Upload
+Build and upload:
 
 ```bash
-cd firmware
-pio run -t upload -e esp32
+cd firmware && pio run -t upload -e esp32
 ```
-
-### 3. Monitor Connection
-
-```bash
-pio device monitor -p COM3 -b 115200
-```
-
-Expected output:
-```
-WiFi connected. IP: 192.168.1.100
-WebSocket connected
-TX: {"timestamp": 1234567890, "raw": 2500}
-```
-
-## Phase 5: Testing & Validation
-
-### 1. Full System Test
-
-1. **Open Frontend**: https://hangboard.vercel.app
-2. **Check Connection**: Status should show "Connected"
-3. **Start Session**: Backend should create session
-4. **Verify Data**: Check browser console for measurements
-5. **Stop Session**: Session should end properly
-
-### 2. Database Verification
-
-```bash
-# Check sessions exist
-psql "$DATABASE_URL" -c "SELECT COUNT(*) FROM sessions;"
-
-# View recent measurements
-psql "$DATABASE_URL" -c "SELECT * FROM samples ORDER BY created_at DESC LIMIT 10;"
-
-# Check calibration
-psql "$DATABASE_URL" -c "SELECT * FROM calibration LIMIT 1;"
-```
-
-### 3. Performance Testing
-
-```bash
-# Backend response time
-time curl https://your-backend.railway.app/sessions
-
-# WebSocket latency (use wscat)
-wscat -c wss://your-backend.railway.app
-```
-
-### 4. Load Testing (Optional)
-
-```bash
-# Install Artillery
-npm install -g artillery
-
-# Create load-test.yml
-cat > load-test.yml << EOF
-config:
-  target: "https://your-backend.railway.app"
-  phases:
-    - duration: 60
-      arrivalRate: 10
-scenarios:
-  - name: "API Load Test"
-    flow:
-      - get:
-          url: "/sessions"
-      - get:
-          url: "/calibration"
-EOF
-
-artillery run load-test.yml
-```
-
-## Phase 6: Monitoring & Maintenance
-
-### 1. Set Up Logging
-
-**Railway Backend Logs**:
-```bash
-railway logs
-```
-
-**Monitor WebSocket Errors**:
-```bash
-# In backend server.js, check for connection errors
-# Errors are logged to stdout/Railway dashboard
-```
-
-### 2. Database Backups
-
-**Automatic Backups** (Supabase):
-- Daily backups enabled by default
-- 7-day retention for free tier
-- Access from: Dashboard → Backups
-
-**Manual Backup**:
-```bash
-pg_dump "$DATABASE_URL" > backup-$(date +%Y%m%d).sql
-```
-
-### 3. Monitoring Alerts
-
-Set up alerts in:
-- **Railway**: Metrics → Add Alert
-- **Vercel**: Settings → Analytics
-- **Supabase**: Settings → Alerts
-
-Alert on:
-- Backend CPU > 80%
-- Database connections > 10
-- Error rate > 5%
-
-### 4. Regular Maintenance
-
-**Weekly**:
-- Check error logs
-- Verify database size
-- Review session statistics
-
-**Monthly**:
-- Update dependencies
-- Review security updates
-- Backup database locally
-
-**Quarterly**:
-- Full system test
-- Performance profiling
-- Security audit
-
-## Scaling Considerations
-
-### Increasing Capacity
-
-**Backend (Railway)**:
-- Upgrade plan for more CPU/RAM
-- Auto-scaling configuration
-- Load balancing setup
-
-**Database (Supabase)**:
-- Upgrade tier for more connections
-- Enable read replicas
-- Archive old sessions
-
-**Frontend (Vercel)**:
-- Edge caching configuration
-- CDN optimization
-- Analytics monitoring
-
-### Cost Optimization
-
-- **Railway**: $5/month for small workloads
-- **Vercel**: Free tier covers most use cases
-- **Supabase**: ~$25/month production tier
-
-Monthly estimate: $30-40
-
-## Troubleshooting Production
-
-### Backend Issues
-
-**Container Won't Start**:
-```bash
-railway logs
-# Check for missing environment variables
-```
-
-**High Memory Usage**:
-```bash
-# Check for WebSocket memory leak
-# Verify database connection pooling
-```
-
-### Frontend Issues
-
-**Build Failures**:
-```bash
-# Check vercel logs
-vercel logs --prod
-```
-
-**Slow Performance**:
-- Check DevTools Network tab
-- Verify API response times
-- Check WebSocket latency
-
-### Database Issues
-
-**Connection Timeout**:
-```bash
-# Check Supabase connection limits
-# Verify firewall rules
-psql -h host -U user -d db -c "SELECT 1;"
-```
-
-**Slow Queries**:
-```sql
--- Check query performance
-EXPLAIN ANALYZE SELECT * FROM samples WHERE session_id = 1;
-
--- Add indexes if needed
-CREATE INDEX idx_samples_session_id_timestamp 
-ON samples(session_id, timestamp);
-```
-
-## Rollback Procedure
-
-### Backend Rollback (Railway)
-
-1. Railway Dashboard → Deploys
-2. Select previous working deployment
-3. Click "Redeploy"
-
-### Frontend Rollback (Vercel)
-
-1. Vercel Dashboard → Deployments
-2. Find previous working deployment
-3. Click "Promote to Production"
-
-### Database Rollback
-
-```bash
-# Restore from backup
-psql "$DATABASE_URL" -f backup-2024-01-10.sql
-```
-
-## Security Hardening
-
-### HTTPS/WSS Only
-✅ Vercel: Automatic HTTPS
-✅ Railway: Automatic HTTPS
-✅ Supabase: Automatic SSL
-
-### Database Security
-```sql
--- Revoke public access
-REVOKE ALL ON DATABASE hangboard FROM PUBLIC;
-
--- Create read-only role for frontend
-CREATE ROLE hangboard_readonly;
-GRANT SELECT ON ALL TABLES IN SCHEMA public TO hangboard_readonly;
-ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO hangboard_readonly;
-```
-
-### API Rate Limiting
-```javascript
-// In backend server.js - add rate limiter
-const rateLimit = require('express-rate-limit');
-const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100 // limit each IP to 100 requests per windowMs
-});
-app.use(limiter);
-```
-
-### Environment Variables
-- ✅ Never commit `.env` files
-- ✅ Use platform-specific secret management
-- ✅ Rotate API keys quarterly
-- ✅ Enable 2FA for all services
-
-## Post-Deployment Checklist
-
-- [ ] Frontend loads without errors
-- [ ] Backend health check passes
-- [ ] WebSocket connection works
-- [ ] Database contains sample data
-- [ ] Calibration can be saved/loaded
-- [ ] Sessions can be created/stopped
-- [ ] Simulation mode works
-- [ ] Historical data displays
-- [ ] No console errors
-- [ ] Performance acceptable
-- [ ] Backups configured
-- [ ] Monitoring alerts set
-- [ ] Security review complete
-
-## Support & Documentation
-
-- [Railway Docs](https://docs.railway.app/)
-- [Vercel Docs](https://vercel.com/docs)
-- [Supabase Docs](https://supabase.com/docs)
-- [Terraform Docs](https://www.terraform.io/docs)
-
-## Next Steps
-
-1. **Monitor for 24 hours**: Check logs and metrics
-2. **User Testing**: Get feedback on interface
-3. **Optimize Performance**: Based on monitoring data
-4. **Plan Scaling**: As user base grows
 
 ---
 
-**Deployment Complete!** 🚀
+## Operations
+
+### Service Management
+
+```bash
+make status           # systemctl status hangboard
+make logs             # journalctl -u hangboard -f
+```
+
+Or SSH directly:
+
+```bash
+ssh pi@hang-tight.local
+sudo systemctl restart hangboard
+sudo journalctl -u hangboard -f --no-pager
+```
+
+### Pull Data from Pi
+
+```bash
+make pull-data        # copies hangboard.db to data/hangboard-pi.db
+make pull-csv         # exports sessions, samples, calibration as CSV
+```
+
+### Database on Pi
+
+```bash
+ssh pi@hang-tight.local
+sqlite3 /opt/hang-tight/data/hangboard.db "SELECT COUNT(*) FROM sessions;"
+```
+
+---
+
+## Backup
+
+The SQLite database is a single file. Back it up with:
+
+```bash
+make pull-data        # rsync from Pi to local
+# or:
+scp pi@hang-tight.local:/opt/hang-tight/data/hangboard.db ./backup-$(date +%Y%m%d).db
+```
+
+---
+
+## Post-Deployment Checklist
+
+- [ ] Frontend loads at `http://<pi-ip>:3001`
+- [ ] WebSocket connection shows "Connected"
+- [ ] Simulation mode works
+- [ ] ESP32 connects and streams data
+- [ ] Sessions can be started/stopped
+- [ ] Calibration can be saved/loaded
+- [ ] Historical data displays correctly
+
+---
+
+## Troubleshooting
+
+See [TROUBLESHOOTING.md](TROUBLESHOOTING.md) for common issues.
+
+**Service won't start**: Check `make logs` for errors. Common causes:
+
+- Missing `node_modules` — run `make deploy` (not `deploy-quick`)
+- Port 3001 already in use
+- Permissions on `/opt/hang-tight/data/`
+
+**Can't reach Pi**: Verify network connectivity with `ping hang-tight.local`. Check that the Pi is on and connected to the same network.

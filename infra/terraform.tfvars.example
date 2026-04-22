@@ -1,6 +1,0 @@
-# Copy to terraform.tfvars and fill in values
-supabase_access_token = ""
-organization_id       = ""
-db_password           = ""  # Must be at least 16 characters
-environment           = "dev"
-region                = "us-east-1"
