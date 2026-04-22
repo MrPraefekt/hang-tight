@@ -1,27 +1,16 @@
 import React, { useState } from 'react'
 
-/**
- * Session Manager Component
- */
-export default function SessionManager({ sessionActive, onStart, onStop, wsConnected }) {
+export default function SessionManager({ sessionActive, onStart, onStop, onClear, wsConnected }) {
   const [loading, setLoading] = useState(false)
 
   const handleStart = async () => {
     setLoading(true)
-    try {
-      await onStart()
-    } finally {
-      setLoading(false)
-    }
+    try { await onStart() } finally { setLoading(false) }
   }
 
   const handleStop = async () => {
     setLoading(true)
-    try {
-      await onStop()
-    } finally {
-      setLoading(false)
-    }
+    try { await onStop() } finally { setLoading(false) }
   }
 
   return (
@@ -46,7 +35,7 @@ export default function SessionManager({ sessionActive, onStart, onStop, wsConne
           className="button-success"
           style={{ flex: 1 }}
         >
-          {loading ? 'Starting...' : '▶ Start Session'}
+          {loading && !sessionActive ? 'Starting...' : '&#x25B6; Start Session'}
         </button>
         <button 
           onClick={handleStop}
@@ -54,7 +43,17 @@ export default function SessionManager({ sessionActive, onStart, onStop, wsConne
           className="button-danger"
           style={{ flex: 1 }}
         >
-          {loading ? 'Stopping...' : '⏹ Stop Session'}
+          {loading && sessionActive ? 'Stopping...' : '&#x23F9; Stop Session'}
+        </button>
+      </div>
+
+      <div style={{ marginTop: '0.5rem' }}>
+        <button 
+          onClick={onClear}
+          className="button-secondary"
+          style={{ width: '100%' }}
+        >
+          Clear Display
         </button>
       </div>
 
@@ -62,9 +61,9 @@ export default function SessionManager({ sessionActive, onStart, onStop, wsConne
 
       <p style={{ fontSize: '0.875rem', color: 'var(--text-secondary)' }}>
         {wsConnected ? (
-          <>✓ Backend connected and ready</>
+          <>&#x2713; Backend connected and ready</>
         ) : (
-          <>✕ Waiting for backend connection...</>
+          <>&#x2715; Waiting for backend connection...</>
         )}
       </p>
     </div>

@@ -1,11 +1,14 @@
 /**
  * Hangboard Force Measurement System - Backend
- * 
+ *
  * WebSocket server for:
- * - Real-time data streaming from ESP32
+ * - Real-time data streaming from ESP32 (path: /ws/esp)
+ * - Frontend live data consumption (path: /ws/client)
  * - Calibration management
- * - Session recording
- * - Simulation mode
+ * - Session recording with batch inserts
+ * - Simulation mode (same output format as live)
+ *
+ * Uses SQLite for zero-config local storage (runs on Mac + Raspberry Pi).
  */
 
 require('dotenv').config();
@@ -13,168 +16,249 @@ const express = require('express');
 const { WebSocketServer } = require('ws');
 const http = require('http');
 const cors = require('cors');
-const bodyParser = require('body-parser');
-const { Pool } = require('pg');
+const Database = require('better-sqlite3');
+const path = require('path');
+const url = require('url');
+const fs = require('fs');
 
 // Configuration
 const PORT = process.env.PORT || 3001;
-const DATABASE_URL = process.env.DATABASE_URL;
+const DB_PATH = process.env.DB_PATH || path.join(__dirname, 'data', 'hangboard.db');
+const BATCH_SIZE = 20;
+const BATCH_INTERVAL_MS = 1000;
 
-// Initialize Express
+// Ensure data directory exists
+fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
+
+// Initialize SQLite
+const db = new Database(DB_PATH);
+db.pragma('journal_mode = WAL');
+db.pragma('busy_timeout = 5000');
+db.pragma('foreign_keys = ON');
+
+// ============================================================================
+// Schema initialization
+// ============================================================================
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS sessions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    start_time TEXT NOT NULL DEFAULT (datetime('now')),
+    end_time TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  CREATE TABLE IF NOT EXISTS samples (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    timestamp INTEGER NOT NULL,
+    raw INTEGER NOT NULL,
+    force REAL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  CREATE TABLE IF NOT EXISTS calibration (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    "offset" REAL NOT NULL,
+    scale REAL NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_samples_session_id ON samples(session_id);
+  CREATE INDEX IF NOT EXISTS idx_samples_timestamp ON samples(timestamp);
+  CREATE INDEX IF NOT EXISTS idx_sessions_start_time ON sessions(start_time);
+  CREATE INDEX IF NOT EXISTS idx_calibration_created_at ON calibration(created_at);
+`);
+
+// ============================================================================
+// Prepared statements (much faster than ad-hoc queries)
+// ============================================================================
+
+const stmts = {
+  getCalibration: db.prepare(
+    'SELECT * FROM calibration ORDER BY created_at DESC LIMIT 1'
+  ),
+  insertCalibration: db.prepare(
+    'INSERT INTO calibration ("offset", scale) VALUES (?, ?)'
+  ),
+  getLastRow: db.prepare(
+    'SELECT * FROM calibration WHERE id = last_insert_rowid()'
+  ),
+  insertSession: db.prepare(
+    "INSERT INTO sessions (start_time) VALUES (datetime('now'))"
+  ),
+  getLastSession: db.prepare(
+    'SELECT * FROM sessions WHERE id = last_insert_rowid()'
+  ),
+  endSession: db.prepare(
+    "UPDATE sessions SET end_time = datetime('now'), updated_at = datetime('now') WHERE id = ?"
+  ),
+  getSessionSamples: db.prepare(
+    'SELECT * FROM samples WHERE session_id = ? ORDER BY timestamp ASC'
+  ),
+  getSessions: db.prepare(
+    'SELECT * FROM sessions ORDER BY start_time DESC'
+  ),
+  getSessionById: db.prepare(
+    'SELECT * FROM sessions WHERE id = ?'
+  ),
+  insertSample: db.prepare(
+    'INSERT INTO samples (session_id, timestamp, raw, force) VALUES (?, ?, ?, ?)'
+  ),
+};
+
+// ============================================================================
+// Express + HTTP server
+// ============================================================================
+
 const app = express();
 app.use(cors());
-app.use(bodyParser.json());
+app.use(express.json());
 
-// Initialize HTTP server for WebSocket
+// Serve frontend static files (built with `vite build` -> backend/public/)
+const publicDir = path.join(__dirname, 'public');
+if (fs.existsSync(publicDir)) {
+  app.use(express.static(publicDir));
+}
+
 const server = http.createServer(app);
-const wss = new WebSocketServer({ server });
 
-// Database connection pool
-const db = new Pool({
-  connectionString: DATABASE_URL,
-  ssl: { rejectUnauthorized: false }
+// Two WebSocket servers on different paths
+const wssEsp = new WebSocketServer({ noServer: true });
+const wssClient = new WebSocketServer({ noServer: true });
+
+server.on('upgrade', (request, socket, head) => {
+  const pathname = url.parse(request.url).pathname;
+
+  if (pathname === '/ws/esp') {
+    wssEsp.handleUpgrade(request, socket, head, (ws) => {
+      wssEsp.emit('connection', ws, request);
+    });
+  } else if (pathname === '/ws/client' || pathname === '/ws' || pathname === '/') {
+    wssClient.handleUpgrade(request, socket, head, (ws) => {
+      wssClient.emit('connection', ws, request);
+    });
+  } else {
+    socket.destroy();
+  }
 });
 
-// Global state
+// ============================================================================
+// State
+// ============================================================================
+
 let currentSession = null;
 let currentCalibration = null;
 let simulationActive = false;
 let simulationInterval = null;
-let simulationSessionId = null;
-let simulationSampleIndex = 0;
-let simulationSamples = [];
 
-// Connected WebSocket clients
-const clients = new Set();
+const frontendClients = new Set();
+
+let sampleBatch = [];
+let batchTimer = null;
 
 // ============================================================================
-// Database Functions
+// Database Functions (synchronous — better-sqlite3 is sync by design)
 // ============================================================================
 
-/**
- * Get current calibration from database
- */
-async function getCalibration() {
+function getCalibration() {
   try {
-    const result = await db.query(
-      'SELECT * FROM calibration ORDER BY created_at DESC LIMIT 1'
-    );
-    return result.rows.length > 0 ? result.rows[0] : null;
+    return stmts.getCalibration.get() || null;
   } catch (error) {
-    console.error('Error fetching calibration:', error);
+    console.error('Error fetching calibration:', error.message);
     return null;
   }
 }
 
-/**
- * Save calibration to database
- */
-async function saveCalibration(offset, scale) {
-  try {
-    const result = await db.query(
-      'INSERT INTO calibration (offset, scale, created_at) VALUES ($1, $2, NOW()) RETURNING *',
-      [offset, scale]
-    );
-    currentCalibration = result.rows[0];
-    return currentCalibration;
-  } catch (error) {
-    console.error('Error saving calibration:', error);
-    throw error;
-  }
+function saveCalibration(offset, scale) {
+  stmts.insertCalibration.run(offset, scale);
+  const row = stmts.getCalibration.get();
+  currentCalibration = row;
+  return row;
+}
+
+function createSession() {
+  stmts.insertSession.run();
+  const row = stmts.getLastSession.get();
+  currentSession = row;
+  sampleBatch = [];
+  return row;
+}
+
+function endSession() {
+  if (!currentSession) return null;
+  flushSampleBatch();
+  stmts.endSession.run(currentSession.id);
+  const row = stmts.getSessionById.get(currentSession.id);
+  currentSession = null;
+  return row;
 }
 
 /**
- * Start new session
+ * Batch insert samples inside a single transaction
  */
-async function startSession() {
+const batchInsertSamples = db.transaction((rows) => {
+  for (const s of rows) {
+    stmts.insertSample.run(s.session_id, s.timestamp, s.raw, s.force);
+  }
+});
+
+function flushSampleBatch() {
+  if (sampleBatch.length === 0) return;
+  const batch = sampleBatch.splice(0);
   try {
-    const result = await db.query(
-      'INSERT INTO sessions (start_time) VALUES (NOW()) RETURNING *'
-    );
-    currentSession = result.rows[0];
-    return currentSession;
+    batchInsertSamples(batch);
   } catch (error) {
-    console.error('Error starting session:', error);
-    throw error;
+    console.error('Error batch inserting samples:', error.message);
   }
 }
 
-/**
- * End current session
- */
-async function endSession() {
-  try {
-    if (currentSession) {
-      const result = await db.query(
-        'UPDATE sessions SET end_time = NOW() WHERE id = $1 RETURNING *',
-        [currentSession.id]
-      );
-      currentSession = null;
-      return result.rows[0];
-    }
-  } catch (error) {
-    console.error('Error ending session:', error);
-    throw error;
+function queueSample(sessionId, timestamp, raw, force) {
+  sampleBatch.push({ session_id: sessionId, timestamp, raw, force });
+  if (sampleBatch.length >= BATCH_SIZE) {
+    flushSampleBatch();
   }
 }
 
-/**
- * Save sample to database
- */
-async function saveSample(sessionId, timestamp, raw, force) {
-  try {
-    await db.query(
-      'INSERT INTO samples (session_id, timestamp, raw, force) VALUES ($1, $2, $3, $4)',
-      [sessionId, timestamp, raw, force]
-    );
-  } catch (error) {
-    console.error('Error saving sample:', error);
+function startBatchTimer() {
+  if (batchTimer) return;
+  batchTimer = setInterval(() => {
+    if (sampleBatch.length > 0) flushSampleBatch();
+  }, BATCH_INTERVAL_MS);
+}
+
+function stopBatchTimer() {
+  if (batchTimer) {
+    clearInterval(batchTimer);
+    batchTimer = null;
   }
 }
 
-/**
- * Get session samples for simulation
- */
-async function getSessionSamples(sessionId) {
+function getSessionSamples(sessionId) {
   try {
-    const result = await db.query(
-      'SELECT * FROM samples WHERE session_id = $1 ORDER BY timestamp ASC',
-      [sessionId]
-    );
-    return result.rows;
+    return stmts.getSessionSamples.all(sessionId);
   } catch (error) {
-    console.error('Error fetching samples:', error);
+    console.error('Error fetching samples:', error.message);
     return [];
   }
 }
 
-/**
- * Get all sessions
- */
-async function getSessions() {
+function getSessions() {
   try {
-    const result = await db.query(
-      'SELECT * FROM sessions ORDER BY start_time DESC'
-    );
-    return result.rows;
+    return stmts.getSessions.all();
   } catch (error) {
-    console.error('Error fetching sessions:', error);
+    console.error('Error fetching sessions:', error.message);
     return [];
   }
 }
 
-/**
- * Get session by ID
- */
-async function getSessionById(sessionId) {
+function getSessionById(sessionId) {
   try {
-    const result = await db.query(
-      'SELECT * FROM sessions WHERE id = $1',
-      [sessionId]
-    );
-    return result.rows.length > 0 ? result.rows[0] : null;
+    return stmts.getSessionById.get(sessionId) || null;
   } catch (error) {
-    console.error('Error fetching session:', error);
+    console.error('Error fetching session:', error.message);
     return null;
   }
 }
@@ -183,205 +267,161 @@ async function getSessionById(sessionId) {
 // Data Processing
 // ============================================================================
 
-/**
- * Apply calibration to raw value
- * force = (raw - offset) * scale
- */
 function calibrateRaw(raw, calibration) {
-  if (!calibration) {
-    return raw; // Return raw if no calibration
-  }
-  return (raw - calibration.offset) * calibration.scale;
+  if (!calibration) return raw;
+  return (raw - Number(calibration.offset)) * Number(calibration.scale);
 }
 
-/**
- * Process incoming measurement
- */
-async function processMeasurement(data) {
-  try {
-    const { timestamp, raw } = data;
-    
-    if (!currentSession) {
-      console.warn('Received measurement but no session active');
-      return;
-    }
+function processMeasurement(data) {
+  const { timestamp, raw } = data;
 
-    // Load fresh calibration
-    if (!currentCalibration) {
-      currentCalibration = await getCalibration();
-    }
-
-    // Apply calibration
-    const force = calibrateRaw(raw, currentCalibration);
-
-    // Save to database
-    await saveSample(currentSession.id, timestamp, raw, force);
-
-    // Broadcast to all connected clients
-    const payload = JSON.stringify({
-      type: 'measurement',
-      timestamp,
-      raw,
-      force: Number(force.toFixed(2))
-    });
-
-    broadcastToClients(payload);
-  } catch (error) {
-    console.error('Error processing measurement:', error);
+  if (typeof timestamp !== 'number' || typeof raw !== 'number') {
+    return;
   }
+
+  const force = calibrateRaw(raw, currentCalibration);
+  const forceRounded = Number(force.toFixed(2));
+
+  if (currentSession) {
+    queueSample(currentSession.id, timestamp, raw, forceRounded);
+  }
+
+  broadcastToClients(JSON.stringify({
+    type: 'measurement',
+    timestamp,
+    raw,
+    force: forceRounded
+  }));
 }
 
-/**
- * Broadcast message to all connected WebSocket clients
- */
 function broadcastToClients(message) {
-  clients.forEach(client => {
-    if (client.readyState === 1) { // OPEN
+  frontendClients.forEach(client => {
+    if (client.readyState === 1) {
       client.send(message);
     }
   });
 }
 
 // ============================================================================
-// Simulation Mode
+// Simulation
 // ============================================================================
 
-/**
- * Start simulation from a session
- */
-async function startSimulation(sessionId) {
-  try {
-    simulationSessionId = sessionId;
-    simulationSamples = await getSessionSamples(sessionId);
-    
-    if (simulationSamples.length === 0) {
-      throw new Error('No samples found for simulation');
+function startSimulation(sessionId) {
+  const samples = getSessionSamples(sessionId);
+
+  if (samples.length === 0) {
+    throw new Error('No samples found for simulation');
+  }
+
+  simulationActive = true;
+  let index = 0;
+
+  console.log(`Starting simulation with ${samples.length} samples`);
+
+  simulationInterval = setInterval(() => {
+    if (index >= samples.length) {
+      index = 0;
     }
 
-    simulationSampleIndex = 0;
-    simulationActive = true;
+    const sample = samples[index];
+    broadcastToClients(JSON.stringify({
+      type: 'measurement',
+      timestamp: Number(sample.timestamp),
+      raw: Number(sample.raw),
+      force: Number(Number(sample.force).toFixed(2)),
+      simulated: true
+    }));
+    index++;
+  }, 50);
 
-    console.log(`Starting simulation with ${simulationSamples.length} samples`);
-
-    // Replay at 20 Hz (50ms interval)
-    simulationInterval = setInterval(() => {
-      if (simulationSampleIndex >= simulationSamples.length) {
-        // Loop back to start
-        simulationSampleIndex = 0;
-      }
-
-      const sample = simulationSamples[simulationSampleIndex];
-      const payload = JSON.stringify({
-        type: 'measurement',
-        timestamp: sample.timestamp,
-        raw: sample.raw,
-        force: Number(sample.force.toFixed(2)),
-        simulated: true
-      });
-
-      broadcastToClients(payload);
-      simulationSampleIndex++;
-    }, 50); // 20 Hz
-
-    return { success: true, samples: simulationSamples.length };
-  } catch (error) {
-    console.error('Error starting simulation:', error);
-    throw error;
-  }
+  return { success: true, samples: samples.length };
 }
 
-/**
- * Stop simulation
- */
 function stopSimulation() {
   if (simulationInterval) {
     clearInterval(simulationInterval);
     simulationInterval = null;
   }
   simulationActive = false;
-  simulationSamples = [];
-  simulationSampleIndex = 0;
   console.log('Simulation stopped');
 }
 
 // ============================================================================
-// WebSocket Handler
+// ESP32 WebSocket Handler
 // ============================================================================
 
-wss.on('connection', (ws) => {
-  console.log('New WebSocket connection');
-  clients.add(ws);
+wssEsp.on('connection', (ws) => {
+  console.log('ESP32 connected');
 
-  // Send connection confirmation
-  ws.send(JSON.stringify({
-    type: 'connected',
-    message: 'Connected to Hangboard backend'
-  }));
-
-  ws.on('message', async (data) => {
+  ws.on('message', (data) => {
     try {
-      const message = JSON.parse(data.toString());
-      
-      if (message.type === 'measurement') {
-        // Data from ESP32
-        await processMeasurement(message);
-      }
+      processMeasurement(JSON.parse(data.toString()));
     } catch (error) {
-      console.error('Error handling WebSocket message:', error);
+      console.error('Error handling ESP message:', error.message);
     }
   });
 
+  ws.on('close', () => console.log('ESP32 disconnected'));
+  ws.on('error', (error) => console.error('ESP32 WebSocket error:', error.message));
+});
+
+// ============================================================================
+// Frontend WebSocket Handler
+// ============================================================================
+
+wssClient.on('connection', (ws) => {
+  console.log('Frontend client connected');
+  frontendClients.add(ws);
+
+  ws.send(JSON.stringify({
+    type: 'connected',
+    sessionActive: !!currentSession,
+    simulationActive,
+    calibration: currentCalibration || { offset: 0, scale: 1 }
+  }));
+
   ws.on('close', () => {
-    console.log('WebSocket disconnected');
-    clients.delete(ws);
+    frontendClients.delete(ws);
   });
 
-  ws.on('error', (error) => {
-    console.error('WebSocket error:', error);
-  });
+  ws.on('error', (error) => console.error('Frontend WS error:', error.message));
 });
 
 // ============================================================================
-// REST API Endpoints
+// REST API
 // ============================================================================
 
-/**
- * Health check
- */
 app.get('/health', (req, res) => {
-  res.json({ status: 'ok' });
+  res.json({
+    status: 'ok',
+    sessionActive: !!currentSession,
+    simulationActive,
+    frontendClients: frontendClients.size,
+    espClients: wssEsp.clients.size
+  });
 });
 
-/**
- * GET /calibration - Get current calibration
- */
-app.get('/calibration', async (req, res) => {
+app.get('/calibration', (req, res) => {
   try {
-    const calibration = await getCalibration();
-    res.json(calibration || { offset: 0, scale: 1 });
+    res.json(getCalibration() || { offset: 0, scale: 1 });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
 
-/**
- * POST /calibrate - Save new calibration
- */
-app.post('/calibrate', async (req, res) => {
+app.post('/calibrate', (req, res) => {
   try {
     const { offset, scale } = req.body;
-    
     if (typeof offset !== 'number' || typeof scale !== 'number') {
       return res.status(400).json({ error: 'Invalid offset or scale' });
     }
 
-    const calibration = await saveCalibration(offset, scale);
-    
-    // Notify all clients
+    const calibration = saveCalibration(offset, scale);
+
     broadcastToClients(JSON.stringify({
       type: 'calibration_updated',
-      offset: calibration.offset,
-      scale: calibration.scale
+      offset: Number(calibration.offset),
+      scale: Number(calibration.scale)
     }));
 
     res.json(calibration);
@@ -390,13 +430,15 @@ app.post('/calibrate', async (req, res) => {
   }
 });
 
-/**
- * POST /session/start - Start recording session
- */
-app.post('/session/start', async (req, res) => {
+app.post('/session/start', (req, res) => {
   try {
-    const session = await startSession();
-    
+    if (currentSession) {
+      return res.status(400).json({ error: 'Session already active' });
+    }
+
+    const session = createSession();
+    startBatchTimer();
+
     broadcastToClients(JSON.stringify({
       type: 'session_started',
       session_id: session.id
@@ -408,73 +450,55 @@ app.post('/session/start', async (req, res) => {
   }
 });
 
-/**
- * POST /session/stop - Stop recording session
- */
-app.post('/session/stop', async (req, res) => {
+app.post('/session/stop', (req, res) => {
   try {
-    const session = await endSession();
-    
+    const session = endSession();
+    stopBatchTimer();
+
     broadcastToClients(JSON.stringify({
       type: 'session_stopped',
-      session_id: session.id
+      session_id: session ? session.id : null
     }));
 
-    res.json(session);
+    res.json(session || { message: 'No active session' });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
 
-/**
- * GET /sessions - List all sessions
- */
-app.get('/sessions', async (req, res) => {
+app.get('/sessions', (req, res) => {
   try {
-    const sessions = await getSessions();
-    res.json(sessions);
+    res.json(getSessions());
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
 
-/**
- * GET /sessions/:id - Get session details
- */
-app.get('/sessions/:id', async (req, res) => {
+app.get('/sessions/:id', (req, res) => {
   try {
-    const session = await getSessionById(req.params.id);
+    const session = getSessionById(req.params.id);
     if (!session) {
       return res.status(404).json({ error: 'Session not found' });
     }
-    
-    const samples = await getSessionSamples(req.params.id);
-    res.json({
-      ...session,
-      samples
-    });
+    const samples = getSessionSamples(req.params.id);
+    res.json({ ...session, samples });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
 
-/**
- * POST /simulate/start - Start simulation
- */
-app.post('/simulate/start', async (req, res) => {
+app.post('/simulate/start', (req, res) => {
   try {
     const { session_id } = req.body;
-    
     if (!session_id) {
       return res.status(400).json({ error: 'session_id required' });
     }
-
     if (simulationActive) {
       return res.status(400).json({ error: 'Simulation already running' });
     }
 
-    const result = await startSimulation(session_id);
-    
+    const result = startSimulation(session_id);
+
     broadcastToClients(JSON.stringify({
       type: 'simulation_started',
       session_id
@@ -486,80 +510,61 @@ app.post('/simulate/start', async (req, res) => {
   }
 });
 
-/**
- * POST /simulate/stop - Stop simulation
- */
-app.post('/simulate/stop', async (req, res) => {
+app.post('/simulate/stop', (req, res) => {
   try {
     stopSimulation();
-    
-    broadcastToClients(JSON.stringify({
-      type: 'simulation_stopped'
-    }));
-
+    broadcastToClients(JSON.stringify({ type: 'simulation_stopped' }));
     res.json({ success: true });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
 
-/**
- * GET / - Welcome message
- */
-app.get('/', (req, res) => {
-  res.json({
-    name: 'Hangboard Force Measurement System',
-    version: '1.0.0',
-    endpoints: {
-      'GET /health': 'Health check',
-      'GET /calibration': 'Get current calibration',
-      'POST /calibrate': 'Save calibration (offset, scale)',
-      'POST /session/start': 'Start recording session',
-      'POST /session/stop': 'Stop recording session',
-      'GET /sessions': 'List all sessions',
-      'GET /sessions/:id': 'Get session details with samples',
-      'POST /simulate/start': 'Start simulation (session_id)',
-      'POST /simulate/stop': 'Stop simulation',
-      'WebSocket': 'ws://host/ws - Connects at root path'
-    }
-  });
+// SPA fallback — serve index.html for non-API routes (must be last)
+app.get('*', (req, res) => {
+  const indexPath = path.join(publicDir, 'index.html');
+  if (fs.existsSync(indexPath)) {
+    res.sendFile(indexPath);
+  } else {
+    res.json({
+      name: 'Hangboard Force Measurement System',
+      version: '1.0.0',
+      note: 'No frontend build found in backend/public/. Run: make build'
+    });
+  }
 });
 
 // ============================================================================
-// Initialize Database and Start Server
+// Initialize
 // ============================================================================
 
-async function initialize() {
-  try {
-    // Test database connection
-    const client = await db.connect();
-    console.log('Database connected');
-    client.release();
-
-    // Load current calibration
-    currentCalibration = await getCalibration();
-
-    // Start HTTP server
-    server.listen(PORT, () => {
-      console.log(`🚀 Hangboard Backend running on port ${PORT}`);
-      console.log(`   WebSocket: ws://localhost:${PORT}`);
-      console.log(`   API: http://localhost:${PORT}`);
-    });
-  } catch (error) {
-    console.error('Failed to initialize:', error);
-    process.exit(1);
+function initialize() {
+  currentCalibration = getCalibration();
+  if (currentCalibration) {
+    console.log(`Loaded calibration: offset=${currentCalibration.offset}, scale=${currentCalibration.scale}`);
   }
+
+  server.listen(PORT, () => {
+    console.log(`Hangboard Backend running on port ${PORT}`);
+    console.log(`  Database: ${DB_PATH}`);
+    console.log(`  ESP32 WS:  ws://localhost:${PORT}/ws/esp`);
+    console.log(`  Client WS: ws://localhost:${PORT}/ws/client`);
+    console.log(`  UI + API:  http://localhost:${PORT}`);
+  });
 }
 
-// Graceful shutdown
-process.on('SIGTERM', async () => {
-  console.log('SIGTERM received, shutting down...');
+function shutdown() {
   stopSimulation();
-  await db.end();
+  stopBatchTimer();
+  flushSampleBatch();
+  db.close();
   server.close(() => {
     console.log('Server closed');
     process.exit(0);
   });
-});
+}
+
+process.on('SIGTERM', () => { console.log('SIGTERM'); shutdown(); });
+process.on('SIGINT', () => { console.log('SIGINT'); shutdown(); });
 
 initialize();

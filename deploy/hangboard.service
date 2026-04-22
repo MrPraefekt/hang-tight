@@ -1,0 +1,21 @@
+[Unit]
+Description=Hangboard Force Measurement System
+After=network.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/opt/hangboard
+ExecStart=/usr/bin/node server.js
+Restart=always
+RestartSec=5
+Environment=NODE_ENV=production
+Environment=PORT=3001
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=hangboard
+
+[Install]
+WantedBy=multi-user.target

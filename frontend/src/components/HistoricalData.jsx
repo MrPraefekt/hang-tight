@@ -1,17 +1,14 @@
 import React, { useState } from 'react'
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts'
 
-/**
- * Historical Data Viewer Component
- */
-export default function HistoricalData({ sessions, onRefresh }) {
+export default function HistoricalData({ sessions, onRefresh, apiUrl }) {
   const [selectedSession, setSelectedSession] = useState(null)
   const [loading, setLoading] = useState(false)
 
   const handleViewSession = async (sessionId) => {
     setLoading(true)
     try {
-      const response = await fetch(`${getApiUrl()}/sessions/${sessionId}`)
+      const response = await fetch(`${apiUrl}/sessions/${sessionId}`)
       const data = await response.json()
       setSelectedSession(data)
     } catch (error) {
@@ -22,19 +19,11 @@ export default function HistoricalData({ sessions, onRefresh }) {
     }
   }
 
-  const getApiUrl = () => {
-    return `http://${window.location.hostname}:3001`
-  }
-
-  const formatDate = (dateString) => {
-    return new Date(dateString).toLocaleString()
-  }
+  const formatDate = (dateString) => new Date(dateString).toLocaleString()
 
   const formatDuration = (startTime, endTime) => {
     if (!endTime) return 'In progress'
-    const start = new Date(startTime)
-    const end = new Date(endTime)
-    const seconds = Math.floor((end - start) / 1000)
+    const seconds = Math.floor((new Date(endTime) - new Date(startTime)) / 1000)
     const mins = Math.floor(seconds / 60)
     const secs = seconds % 60
     return `${mins}m ${secs}s`
@@ -44,17 +33,20 @@ export default function HistoricalData({ sessions, onRefresh }) {
     if (!selectedSession || !selectedSession.samples) return []
     return selectedSession.samples.map((s, i) => ({
       index: i,
-      force: Number(s.force.toFixed(2)),
-      raw: s.raw
+      force: Number(Number(s.force).toFixed(2)),
+      raw: Number(s.raw)
     }))
   }
 
-  const stats = selectedSession && selectedSession.samples ? {
-    count: selectedSession.samples.length,
-    maxForce: Math.max(...selectedSession.samples.map(s => s.force)),
-    avgForce: (selectedSession.samples.reduce((sum, s) => sum + s.force, 0) / selectedSession.samples.length).toFixed(2),
-    minForce: Math.min(...selectedSession.samples.map(s => s.force))
-  } : null
+  const stats = selectedSession && selectedSession.samples && selectedSession.samples.length > 0 ? (() => {
+    const forces = selectedSession.samples.map(s => Number(s.force))
+    return {
+      count: forces.length,
+      maxForce: Math.max(...forces),
+      avgForce: (forces.reduce((sum, f) => sum + f, 0) / forces.length).toFixed(2),
+      minForce: Math.min(...forces)
+    }
+  })() : null
 
   return (
     <div className="card">
@@ -66,6 +58,11 @@ export default function HistoricalData({ sessions, onRefresh }) {
         </div>
       ) : (
         <>
+          <div style={{ marginBottom: '1rem' }}>
+            <button onClick={onRefresh} className="button-secondary" style={{ marginBottom: '0.5rem' }}>
+              &#x21BB; Refresh
+            </button>
+          </div>
           <div style={{ marginBottom: '1rem', overflowX: 'auto' }}>
             <table className="table">
               <thead>

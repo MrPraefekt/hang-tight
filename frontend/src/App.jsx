@@ -1,16 +1,27 @@
-import React, { useState, useEffect, useRef } from 'react'
+import React, { useState, useEffect, useRef, useCallback } from 'react'
 import LiveMonitor from './components/LiveMonitor'
 import CalibrationPanel from './components/CalibrationPanel'
 import SessionManager from './components/SessionManager'
 import HistoricalData from './components/HistoricalData'
 import SimulationPanel from './components/SimulationPanel'
 
-/**
- * Main Application Component
- */
+const MAX_MEASUREMENTS = 500;
+const WS_RECONNECT_DELAY = 3000;
+
+function getApiUrl() {
+  return import.meta.env.VITE_API_URL || `http://${window.location.hostname}:3001`
+}
+
+function getWsUrl() {
+  return import.meta.env.VITE_WS_URL
+    ? `${import.meta.env.VITE_WS_URL}/ws/client`
+    : `ws://${window.location.hostname}:3001/ws/client`
+}
+
 export default function App() {
   const [wsConnected, setWsConnected] = useState(false)
   const [sessionActive, setSessionActive] = useState(false)
+  const [simulationActive, setSimulationActive] = useState(false)
   const [currentForce, setCurrentForce] = useState(0)
   const [peakForce, setPeakForce] = useState(0)
   const [elapsedTime, setElapsedTime] = useState(0)
@@ -21,22 +32,30 @@ export default function App() {
   const wsRef = useRef(null)
   const sessionStartTimeRef = useRef(null)
   const timerRef = useRef(null)
+  const reconnectRef = useRef(null)
+  const mountedRef = useRef(true)
 
-  // Initialize WebSocket connection
-  useEffect(() => {
-    const wsUrl = import.meta.env.VITE_WS_URL || `ws://${window.location.hostname}:3001`
+  // WebSocket connection with auto-reconnect
+  const connectWebSocket = useCallback(() => {
+    if (wsRef.current && wsRef.current.readyState < 2) return // CONNECTING or OPEN
     
+    const wsUrl = getWsUrl()
     console.log(`Connecting to WebSocket: ${wsUrl}`)
     
     try {
-      wsRef.current = new WebSocket(wsUrl)
+      const ws = new WebSocket(wsUrl)
+      wsRef.current = ws
       
-      wsRef.current.onopen = () => {
+      ws.onopen = () => {
         console.log('WebSocket connected')
         setWsConnected(true)
+        if (reconnectRef.current) {
+          clearTimeout(reconnectRef.current)
+          reconnectRef.current = null
+        }
       }
       
-      wsRef.current.onmessage = (event) => {
+      ws.onmessage = (event) => {
         try {
           const data = JSON.parse(event.data)
           handleWebSocketMessage(data)
@@ -45,85 +64,81 @@ export default function App() {
         }
       }
       
-      wsRef.current.onclose = () => {
+      ws.onclose = () => {
         console.log('WebSocket disconnected')
         setWsConnected(false)
-        // Attempt reconnect after 3 seconds
-        setTimeout(() => {
-          console.log('Attempting to reconnect...')
-        }, 3000)
+        // Schedule reconnect
+        if (mountedRef.current) {
+          reconnectRef.current = setTimeout(connectWebSocket, WS_RECONNECT_DELAY)
+        }
       }
       
-      wsRef.current.onerror = (error) => {
+      ws.onerror = (error) => {
         console.error('WebSocket error:', error)
-        setWsConnected(false)
       }
     } catch (error) {
       console.error('Failed to create WebSocket:', error)
-    }
-
-    return () => {
-      if (wsRef.current) {
-        wsRef.current.close()
-      }
-      if (timerRef.current) {
-        clearInterval(timerRef.current)
+      if (mountedRef.current) {
+        reconnectRef.current = setTimeout(connectWebSocket, WS_RECONNECT_DELAY)
       }
     }
   }, [])
 
-  // Fetch calibration on mount
   useEffect(() => {
+    mountedRef.current = true
+    connectWebSocket()
     fetchCalibration()
     fetchSessions()
-  }, [])
+    
+    return () => {
+      mountedRef.current = false
+      if (wsRef.current) wsRef.current.close()
+      if (timerRef.current) clearInterval(timerRef.current)
+      if (reconnectRef.current) clearTimeout(reconnectRef.current)
+    }
+  }, [connectWebSocket])
 
-  // Handle incoming WebSocket messages
   function handleWebSocketMessage(data) {
     switch (data.type) {
+      case 'connected':
+        // Sync state from server
+        if (data.sessionActive) setSessionActive(true)
+        if (data.simulationActive) setSimulationActive(true)
+        if (data.calibration) setCalibration(data.calibration)
+        break
       case 'measurement':
         handleMeasurement(data)
         break
       case 'calibration_updated':
-        setCalibration(data)
+        setCalibration({ offset: data.offset, scale: data.scale })
         break
       case 'session_started':
         setSessionActive(true)
         break
       case 'session_stopped':
         setSessionActive(false)
-        setMeasurements([])
-        setPeakForce(0)
-        setElapsedTime(0)
         break
       case 'simulation_started':
-        console.log('Simulation started')
+        setSimulationActive(true)
         break
       case 'simulation_stopped':
-        console.log('Simulation stopped')
+        setSimulationActive(false)
+        setMeasurements([])
+        setCurrentForce(0)
         break
       default:
         break
     }
   }
 
-  // Process incoming measurement
   function handleMeasurement(data) {
-    if (!sessionActive && !data.simulated) return
-    
     const { timestamp, raw, force } = data
     
-    // Update current metrics
     setCurrentForce(force)
-    if (force > peakForce) {
-      setPeakForce(force)
-    }
-    
-    // Store measurement
-    setMeasurements(prev => [...prev.slice(-199), { timestamp, raw, force }])
+    setPeakForce(prev => Math.max(prev, force))
+    setMeasurements(prev => [...prev.slice(-(MAX_MEASUREMENTS - 1)), { timestamp, raw, force }])
   }
 
-  // Fetch current calibration from backend
   async function fetchCalibration() {
     try {
       const response = await fetch(`${getApiUrl()}/calibration`)
@@ -134,7 +149,6 @@ export default function App() {
     }
   }
 
-  // Fetch sessions from backend
   async function fetchSessions() {
     try {
       const response = await fetch(`${getApiUrl()}/sessions`)
@@ -145,13 +159,9 @@ export default function App() {
     }
   }
 
-  // Start session
-  async function startSession() {
+  async function handleStartSession() {
     try {
-      const response = await fetch(`${getApiUrl()}/session/start`, {
-        method: 'POST'
-      })
-      const data = await response.json()
+      await fetch(`${getApiUrl()}/session/start`, { method: 'POST' })
       
       setSessionActive(true)
       sessionStartTimeRef.current = Date.now()
@@ -160,7 +170,6 @@ export default function App() {
       setPeakForce(0)
       setCurrentForce(0)
       
-      // Start timer
       timerRef.current = setInterval(() => {
         setElapsedTime(Math.floor((Date.now() - sessionStartTimeRef.current) / 1000))
       }, 100)
@@ -169,17 +178,10 @@ export default function App() {
     }
   }
 
-  // Stop session
-  async function stopSession() {
+  async function handleStopSession() {
     try {
-      if (timerRef.current) {
-        clearInterval(timerRef.current)
-      }
-      
-      const response = await fetch(`${getApiUrl()}/session/stop`, {
-        method: 'POST'
-      })
-      
+      if (timerRef.current) clearInterval(timerRef.current)
+      await fetch(`${getApiUrl()}/session/stop`, { method: 'POST' })
       setSessionActive(false)
       await fetchSessions()
     } catch (error) {
@@ -187,8 +189,7 @@ export default function App() {
     }
   }
 
-  // Save calibration
-  async function saveCalibration(offset, scale) {
+  async function handleSaveCalibration(offset, scale) {
     try {
       const response = await fetch(`${getApiUrl()}/calibrate`, {
         method: 'POST',
@@ -204,14 +205,17 @@ export default function App() {
     }
   }
 
-  function getApiUrl() {
-    return import.meta.env.VITE_API_URL || `http://${window.location.hostname}:3001`
+  function handleClearState() {
+    setMeasurements([])
+    setCurrentForce(0)
+    setPeakForce(0)
+    setElapsedTime(0)
   }
 
   return (
     <div className="container">
       <header style={{ marginBottom: '2rem' }}>
-        <h1>🧗 Hangboard Force Measurement</h1>
+        <h1>&#x1F9D7; Hangboard Force Measurement</h1>
         <p style={{ color: 'var(--text-secondary)', marginTop: '0.5rem' }}>
           Real-time grip strength monitoring system
         </p>
@@ -229,30 +233,35 @@ export default function App() {
         elapsedTime={elapsedTime}
         measurements={measurements}
         sessionActive={sessionActive}
+        simulationActive={simulationActive}
+        maxPoints={MAX_MEASUREMENTS}
       />
 
       <div className="grid grid-2">
         <SessionManager 
           sessionActive={sessionActive}
-          onStart={startSession}
-          onStop={stopSession}
+          onStart={handleStartSession}
+          onStop={handleStopSession}
+          onClear={handleClearState}
           wsConnected={wsConnected}
         />
 
         <CalibrationPanel 
           calibration={calibration}
-          onSave={saveCalibration}
+          onSave={handleSaveCalibration}
         />
       </div>
 
       <SimulationPanel 
         sessions={sessions}
         apiUrl={getApiUrl()}
+        simulationActive={simulationActive}
       />
 
       <HistoricalData 
         sessions={sessions}
         onRefresh={fetchSessions}
+        apiUrl={getApiUrl()}
       />
     </div>
   )

@@ -1,19 +1,21 @@
 import React, { useState } from 'react'
 
-/**
- * Simulation Panel Component
- */
-export default function SimulationPanel({ sessions, apiUrl }) {
-  const [selectedSession, setSelectedSession] = useState(sessions[0]?.id || '')
+export default function SimulationPanel({ sessions, apiUrl, simulationActive }) {
+  const [selectedSession, setSelectedSession] = useState('')
   const [loading, setLoading] = useState(false)
-  const [simulating, setSimulating] = useState(false)
+
+  // Auto-select first session if none selected
+  React.useEffect(() => {
+    if (!selectedSession && sessions.length > 0) {
+      setSelectedSession(sessions[0].id)
+    }
+  }, [sessions, selectedSession])
 
   const handleStartSimulation = async () => {
     if (!selectedSession) {
       alert('Please select a session to simulate')
       return
     }
-
     setLoading(true)
     try {
       const response = await fetch(`${apiUrl}/simulate/start`, {
@@ -21,13 +23,9 @@ export default function SimulationPanel({ sessions, apiUrl }) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ session_id: parseInt(selectedSession) })
       })
-      
-      if (response.ok) {
-        const data = await response.json()
-        setSimulating(true)
-        console.log('Simulation started:', data)
-      } else {
-        alert('Failed to start simulation')
+      if (!response.ok) {
+        const err = await response.json()
+        alert(err.error || 'Failed to start simulation')
       }
     } catch (error) {
       console.error('Error starting simulation:', error)
@@ -40,19 +38,9 @@ export default function SimulationPanel({ sessions, apiUrl }) {
   const handleStopSimulation = async () => {
     setLoading(true)
     try {
-      const response = await fetch(`${apiUrl}/simulate/stop`, {
-        method: 'POST'
-      })
-      
-      if (response.ok) {
-        setSimulating(false)
-        console.log('Simulation stopped')
-      } else {
-        alert('Failed to stop simulation')
-      }
+      await fetch(`${apiUrl}/simulate/stop`, { method: 'POST' })
     } catch (error) {
       console.error('Error stopping simulation:', error)
-      alert('Error stopping simulation')
     } finally {
       setLoading(false)
     }
@@ -63,12 +51,12 @@ export default function SimulationPanel({ sessions, apiUrl }) {
       <h2 className="card-title">Test Mode - Simulation</h2>
       
       <p style={{ marginBottom: '1rem', color: 'var(--text-secondary)', fontSize: '0.875rem' }}>
-        Replay historical training sessions without hardware. Perfect for testing the frontend.
+        Replay historical sessions without hardware. Uses the same data format as live.
       </p>
 
       {sessions.length === 0 ? (
         <div style={{ padding: '1rem', backgroundColor: 'var(--bg-tertiary)', borderRadius: '0.375rem', color: 'var(--text-secondary)' }}>
-          No sessions available for simulation. Start a real session first.
+          No sessions available for simulation. Record a session first.
         </div>
       ) : (
         <>
@@ -77,7 +65,7 @@ export default function SimulationPanel({ sessions, apiUrl }) {
             <select 
               value={selectedSession}
               onChange={(e) => setSelectedSession(e.target.value)}
-              disabled={simulating}
+              disabled={simulationActive}
             >
               {sessions.map(session => (
                 <option key={session.id} value={session.id}>
@@ -91,27 +79,27 @@ export default function SimulationPanel({ sessions, apiUrl }) {
           <div className="button-group">
             <button 
               onClick={handleStartSimulation}
-              disabled={!selectedSession || simulating || loading}
+              disabled={!selectedSession || simulationActive || loading}
               className="button-success"
               style={{ flex: 1 }}
             >
-              {loading ? 'Starting...' : '▶ Start Simulation'}
+              {loading && !simulationActive ? 'Starting...' : '&#x25B6; Start Simulation'}
             </button>
             <button 
               onClick={handleStopSimulation}
-              disabled={!simulating || loading}
+              disabled={!simulationActive || loading}
               className="button-danger"
               style={{ flex: 1 }}
             >
-              {loading ? 'Stopping...' : '⏹ Stop Simulation'}
+              {loading && simulationActive ? 'Stopping...' : '&#x23F9; Stop Simulation'}
             </button>
           </div>
 
           <div style={{ marginTop: '1rem', padding: '0.75rem', backgroundColor: 'var(--bg-tertiary)', borderRadius: '0.375rem' }}>
             <div className="metric-label">Status</div>
             <div style={{ marginTop: '0.5rem' }}>
-              <span className={`badge ${simulating ? 'badge-success' : 'badge-info'}`}>
-                {simulating ? 'Simulating' : 'Ready'}
+              <span className={`badge ${simulationActive ? 'badge-success' : 'badge-info'}`}>
+                {simulationActive ? 'Simulating' : 'Ready'}
               </span>
             </div>
           </div>
