@@ -3,15 +3,15 @@
 # Usage:
 #   make dev          — run backend + frontend locally (development)
 #   make build        — build frontend into backend/public/
-#   make deploy       — build + rsync to Pi + restart service
-#   make pull-data    — copy Pi's SQLite database to local ./data/
+#   make deploy       — push to git, Pi pulls via deploy script
 #   make seed         — insert sample data into local DB
 #   make clean        — remove build artifacts
 #
-# Configure PI_HOST below (or override: make deploy PI_HOST=192.168.1.50)
+# The Pi pulls code from GitHub. See deploy/setup-pi.sh for initial setup.
+# For SSH-based commands, configure PI_HOST below.
 
 PI_HOST  ?= hang-tight.local
-PI_USER  ?= hang-tight
+PI_USER  ?= pi
 PI_PATH  ?= /opt/hang-tight
 PI_SSH    = $(PI_USER)@$(PI_HOST)
 
@@ -46,36 +46,25 @@ build:
 	@echo "Build complete. Run 'cd backend && node server.js' to test."
 
 # ============================================================================
-# Deploy to Raspberry Pi
+# Deploy to Raspberry Pi (git-based)
 # ============================================================================
 
+# Push to GitHub, then trigger deploy on Pi via SSH
 .PHONY: deploy
-deploy: build
-	@echo "Deploying to $(PI_SSH):$(PI_PATH)..."
-	rsync -azP --delete \
-		--exclude node_modules \
-		--exclude .env \
-		--exclude 'data/*.db' \
-		--exclude 'data/*.db-wal' \
-		--exclude 'data/*.db-shm' \
-		backend/ $(PI_SSH):$(PI_PATH)/
-	@echo "Installing dependencies on Pi..."
-	ssh $(PI_SSH) "cd $(PI_PATH) && npm install --production"
-	@echo "Restarting service..."
-	ssh $(PI_SSH) "sudo systemctl restart hang-tight"
+deploy:
+	@echo "Pushing to GitHub..."
+	git push origin main
+	@echo "Triggering deploy on Pi..."
+	ssh $(PI_SSH) "cd $(PI_PATH) && ./deploy/deploy.sh"
 	@echo "✓ Deployed. Open http://$(PI_HOST):3001"
 
+# Quick deploy: skip npm install on Pi
 .PHONY: deploy-quick
-deploy-quick: build
-	@echo "Quick deploy (skip npm install)..."
-	rsync -azP --delete \
-		--exclude node_modules \
-		--exclude .env \
-		--exclude 'data/*.db' \
-		--exclude 'data/*.db-wal' \
-		--exclude 'data/*.db-shm' \
-		backend/ $(PI_SSH):$(PI_PATH)/
-	ssh $(PI_SSH) "sudo systemctl restart hangboard"
+deploy-quick:
+	@echo "Pushing to GitHub..."
+	git push origin main
+	@echo "Triggering quick deploy on Pi..."
+	ssh $(PI_SSH) "cd $(PI_PATH) && ./deploy/deploy.sh --quick"
 	@echo "✓ Deployed."
 
 # ============================================================================
@@ -117,23 +106,14 @@ pull-csv: pull-data
 	@wc -l data/*.csv
 
 # ============================================================================
-# Pi setup (run once on fresh Pi)
+# Pi setup (run once on fresh Pi — or use deploy/setup-pi.sh directly)
 # ============================================================================
 
 .PHONY: pi-setup
 pi-setup:
-	@echo "Setting up Raspberry Pi..."
-	ssh $(PI_SSH) "\
-		curl -fsSL https://deb.nodesource.com/setup_20.x | sudo bash - && \
-		sudo apt-get install -y nodejs && \
-		sudo mkdir -p $(PI_PATH)/data && \
-		sudo chown -R $(PI_USER):$(PI_USER) $(PI_PATH)"
-	scp deploy/hangboard.service $(PI_SSH):/tmp/hangboard.service
-	ssh $(PI_SSH) "\
-		sudo cp /tmp/hangboard.service /etc/systemd/system/ && \
-		sudo systemctl daemon-reload && \
-		sudo systemctl enable hangboard"
-	@echo "✓ Pi ready. Run 'make deploy' to push code."
+	@echo "Running setup script on Pi..."
+	ssh $(PI_SSH) "curl -fsSL https://raw.githubusercontent.com/mrpraefekt/hang-tight/main/deploy/setup-pi.sh | bash"
+	@echo "✓ Pi ready."
 
 # ============================================================================
 # Utilities
