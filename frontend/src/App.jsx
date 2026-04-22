@@ -7,10 +7,25 @@ import SimulationPanel from './components/SimulationPanel'
 
 const MAX_MEASUREMENTS = 500;
 const WS_RECONNECT_DELAY = 3000;
+const BUILD_CHECK_INTERVAL = 5000;
 
 function getApiUrl() {
   return import.meta.env.VITE_API_URL || `http://${window.location.hostname}:3001`
 }
+
+// Auto-reload when Pi deploys a new build
+let _knownBuildHash = null;
+setInterval(async () => {
+  try {
+    const res = await fetch(`${getApiUrl()}/build-hash`, { cache: 'no-store' });
+    const { hash } = await res.json();
+    if (_knownBuildHash && hash !== _knownBuildHash) {
+      console.log(`New build detected (${_knownBuildHash} → ${hash}), reloading...`);
+      window.location.reload();
+    }
+    _knownBuildHash = hash;
+  } catch (_) {}
+}, BUILD_CHECK_INTERVAL);
 
 function getWsUrl() {
   return import.meta.env.VITE_WS_URL

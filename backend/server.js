@@ -401,6 +401,17 @@ app.get('/health', (req, res) => {
   });
 });
 
+// Build hash for auto-reload — returns current git commit
+const { execSync } = require('child_process');
+let buildHash = 'dev';
+try {
+  buildHash = execSync('git rev-parse --short HEAD', { cwd: path.join(__dirname, '..') }).toString().trim();
+} catch (_) {}
+app.get('/build-hash', (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  res.json({ hash: buildHash });
+});
+
 app.get('/calibration', (req, res) => {
   try {
     res.json(getCalibration() || { offset: 0, scale: 1 });

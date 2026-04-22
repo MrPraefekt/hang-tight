@@ -116,6 +116,19 @@ pi-setup:
 	@echo "✓ Pi ready."
 
 # ============================================================================
+# Fast iteration: commit + push (Pi auto-deploys via cron)
+# ============================================================================
+
+.PHONY: ship
+ship:
+	@git add -A
+	@git diff --cached --stat
+	@read -p "Commit message: " msg && git commit -m "$$msg"
+	git push origin main
+	@echo "✓ Pushed. Pi will auto-deploy within ~15 seconds."
+	@echo "  Browser will auto-reload when build is ready."
+
+# ============================================================================
 # Utilities
 # ============================================================================
 
