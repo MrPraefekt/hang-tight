@@ -15,13 +15,19 @@ function getApiUrl() {
 
 // Auto-reload when Pi deploys a new build
 let _knownBuildHash = null;
+let _buildHashListeners = [];
+function onBuildHash(fn) { _buildHashListeners.push(fn); }
+
 setInterval(async () => {
   try {
     const res = await fetch(`${getApiUrl()}/build-hash`, { cache: 'no-store' });
     const { hash } = await res.json();
     if (_knownBuildHash && hash !== _knownBuildHash) {
-      console.log(`New build detected (${_knownBuildHash} → ${hash}), reloading...`);
-      window.location.reload();
+      console.log(`New build detected (${_knownBuildHash} → ${hash}), reloading in 2s...`);
+      _buildHashListeners.forEach(fn => fn(hash, true));
+      setTimeout(() => window.location.reload(), 2000);
+    } else {
+      _buildHashListeners.forEach(fn => fn(hash, false));
     }
     _knownBuildHash = hash;
   } catch (_) {}
@@ -227,12 +233,42 @@ export default function App() {
     setElapsedTime(0)
   }
 
+  const [buildHash, setBuildHash] = useState(null);
+  const [updating, setUpdating] = useState(false);
+
+  useEffect(() => {
+    onBuildHash((hash, isNew) => {
+      setBuildHash(hash);
+      if (isNew) setUpdating(true);
+    });
+  }, []);
+
   return (
     <div className="container">
+      {updating && (
+        <div style={{
+          position: 'fixed', top: 0, left: 0, right: 0,
+          background: 'linear-gradient(90deg, #4ade80, #22d3ee)',
+          color: '#000', textAlign: 'center', padding: '0.6rem',
+          fontWeight: 600, fontSize: '0.9rem', zIndex: 9999,
+          animation: 'slideDown 0.3s ease-out'
+        }}>
+          🚀 New version deployed — reloading...
+        </div>
+      )}
       <header style={{ marginBottom: '2rem' }}>
         <h1>🧗 Hang Tight!</h1>
         <p style={{ color: 'var(--text-secondary)', marginTop: '0.5rem' }}>
-          Real-time grip strength monitoring — deployed from the pipeline 🚀
+          Real-time grip strength monitoring
+          {buildHash && (
+            <span style={{
+              marginLeft: '0.75rem', fontSize: '0.7rem',
+              background: 'var(--bg-secondary, #333)', color: 'var(--text-secondary, #aaa)',
+              padding: '0.15rem 0.5rem', borderRadius: '999px', fontFamily: 'monospace'
+            }}>
+              v{buildHash}
+            </span>
+          )}
         </p>
         <div style={{ marginTop: '1rem' }}>
           <span className={`status ${wsConnected ? 'connected' : 'disconnected'}`}>

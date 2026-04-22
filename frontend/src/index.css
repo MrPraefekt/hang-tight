@@ -1,5 +1,10 @@
 /* Global Styles */
 
+@keyframes slideDown {
+  from { transform: translateY(-100%); }
+  to { transform: translateY(0); }
+}
+
 :root {
   --bg-primary: #0f172a;
   --bg-secondary: #1e293b;
