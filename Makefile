@@ -11,7 +11,7 @@
 # For SSH-based commands, configure PI_HOST below.
 
 PI_HOST  ?= hang-tight.local
-PI_USER  ?= pi
+PI_USER  ?= hang-tight
 PI_PATH  ?= /opt/hang-tight
 PI_SSH    = $(PI_USER)@$(PI_HOST)
 
@@ -55,17 +55,8 @@ deploy:
 	@echo "Pushing to GitHub..."
 	git push origin main
 	@echo "Triggering deploy on Pi..."
-	ssh $(PI_SSH) "cd $(PI_PATH) && ./deploy/deploy.sh"
+	ssh $(PI_SSH) "$(PI_PATH)/deploy/deploy.sh"
 	@echo "✓ Deployed. Open http://$(PI_HOST):3001"
-
-# Quick deploy: skip npm install on Pi
-.PHONY: deploy-quick
-deploy-quick:
-	@echo "Pushing to GitHub..."
-	git push origin main
-	@echo "Triggering quick deploy on Pi..."
-	ssh $(PI_SSH) "cd $(PI_PATH) && ./deploy/deploy.sh --quick"
-	@echo "✓ Deployed."
 
 # ============================================================================
 # Pull data from Pi to local machine
@@ -112,7 +103,14 @@ pull-csv: pull-data
 .PHONY: pi-setup
 pi-setup:
 	@echo "Running setup script on Pi..."
-	ssh $(PI_SSH) "curl -fsSL https://raw.githubusercontent.com/mrpraefekt/hang-tight/main/deploy/setup-pi.sh | bash"
+	ssh $(PI_SSH) "bash $(PI_PATH)/deploy/setup-pi.sh"
+	@echo "✓ Pi ready."
+
+# First-time setup: clone repo on Pi then run setup (use when /opt/hang-tight doesn't exist yet)
+.PHONY: pi-bootstrap
+pi-bootstrap:
+	@echo "Bootstrapping Pi from scratch..."
+	ssh $(PI_SSH) "sudo apt-get update -qq && sudo apt-get install -y git && sudo mkdir -p $(PI_PATH) && sudo chown -R \$$(whoami):\$$(whoami) $(PI_PATH) && git clone https://github.com/mrpraefekt/hang-tight.git $(PI_PATH) && bash $(PI_PATH)/deploy/setup-pi.sh"
 	@echo "✓ Pi ready."
 
 # ============================================================================

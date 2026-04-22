@@ -4,7 +4,7 @@ After=network.target
 
 [Service]
 Type=simple
-User=pi
+User=DEPLOY_USER
 WorkingDirectory=/opt/hang-tight/backend
 ExecStart=/usr/bin/node server.js
 Restart=always
