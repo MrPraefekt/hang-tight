@@ -230,9 +230,9 @@ export default function App() {
   return (
     <div className="container">
       <header style={{ marginBottom: '2rem' }}>
-        <h1>&#x1F9D7; Hangboard Force Measurement</h1>
+        <h1>🧗 Hang Tight!</h1>
         <p style={{ color: 'var(--text-secondary)', marginTop: '0.5rem' }}>
-          Real-time grip strength monitoring system
+          Real-time grip strength monitoring — deployed from the pipeline 🚀
         </p>
         <div style={{ marginTop: '1rem' }}>
           <span className={`status ${wsConnected ? 'connected' : 'disconnected'}`}>
