@@ -1,10 +1,7 @@
 import React from 'react'
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts'
 
-/**
- * Live Monitoring Display
- */
-export default function LiveMonitor({ force, peakForce, elapsedTime, measurements, sessionActive }) {
+export default function LiveMonitor({ force, peakForce, elapsedTime, measurements, sessionActive, simulationActive, maxPoints }) {
   const formatTime = (seconds) => {
     const hrs = Math.floor(seconds / 3600)
     const mins = Math.floor((seconds % 3600) / 60)
@@ -19,7 +16,10 @@ export default function LiveMonitor({ force, peakForce, elapsedTime, measurement
 
   return (
     <div className="card">
-      <h2 className="card-title">Live Monitoring</h2>
+      <h2 className="card-title">
+        Live Monitoring
+        {simulationActive && <span className="badge badge-warning" style={{ marginLeft: '0.5rem', fontSize: '0.75rem' }}>SIMULATION</span>}
+      </h2>
       
       <div className="grid grid-3">
         <div className="metric">
@@ -69,13 +69,13 @@ export default function LiveMonitor({ force, peakForce, elapsedTime, measurement
           </ResponsiveContainer>
         ) : (
           <div style={{ textAlign: 'center', color: 'var(--text-secondary)', padding: '2rem' }}>
-            {sessionActive ? 'Waiting for data...' : 'Start a session to see live data'}
+            {sessionActive || simulationActive ? 'Waiting for data...' : 'Start a session or simulation to see live data'}
           </div>
         )}
       </div>
 
       <p style={{ marginTop: '1rem', fontSize: '0.875rem', color: 'var(--text-secondary)' }}>
-        Showing last {measurements.length} measurements at 20 Hz
+        Showing last {measurements.length} / {maxPoints} measurements at 20 Hz
       </p>
     </div>
   )

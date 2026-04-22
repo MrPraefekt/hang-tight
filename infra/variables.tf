@@ -8,6 +8,11 @@ variable "supabase_access_token" {
   sensitive   = true
 }
 
+variable "organization_id" {
+  description = "Supabase organization ID"
+  type        = string
+}
+
 variable "project_name" {
   description = "Project name for resource naming"
   type        = string

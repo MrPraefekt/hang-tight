@@ -1,15 +1,11 @@
-import React, { useState } from 'react'
+import React, { useState, useEffect } from 'react'
 
-/**
- * Calibration Panel Component
- */
 export default function CalibrationPanel({ calibration, onSave }) {
   const [offset, setOffset] = useState(calibration?.offset || 0)
   const [scale, setScale] = useState(calibration?.scale || 1)
   const [loading, setLoading] = useState(false)
 
-  // Update local state when calibration prop changes
-  React.useEffect(() => {
+  useEffect(() => {
     if (calibration) {
       setOffset(calibration.offset || 0)
       setScale(calibration.scale || 1)
@@ -54,7 +50,7 @@ export default function CalibrationPanel({ calibration, onSave }) {
       <div style={{ marginBottom: '1rem', padding: '0.75rem', backgroundColor: 'var(--bg-tertiary)', borderRadius: '0.375rem', fontSize: '0.875rem', color: 'var(--text-secondary)' }}>
         <strong>Calibration Formula:</strong>
         <div style={{ marginTop: '0.5rem', fontFamily: 'monospace' }}>
-          force (N) = (raw - {offset}) × {scale}
+          force (N) = (raw - {offset}) &#xD7; {scale}
         </div>
       </div>
 
@@ -64,7 +60,7 @@ export default function CalibrationPanel({ calibration, onSave }) {
         className="button-success"
         style={{ width: '100%' }}
       >
-        {loading ? 'Saving...' : '✓ Save Calibration'}
+        {loading ? 'Saving...' : '&#x2713; Save Calibration'}
       </button>
 
       <div className="separator"></div>

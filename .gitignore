@@ -12,8 +12,14 @@ node_modules/
 # Build
 dist/
 build/
+backend/public/
 .next
 out/
+
+# SQLite databases
+backend/data/
+data/*.db
+data/*.csv
 
 # IDE
 .vscode/
