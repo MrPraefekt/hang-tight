@@ -53,7 +53,7 @@ console.log(`Schema initialized: ${dbPath}`);
 
 // Seed if requested
 if (process.argv.includes('--seed')) {
-  const seedPath = path.join(__dirname, '..', '..', 'infra', 'migrations', 'seed_sqlite.sql');
+  const seedPath = path.join(__dirname, 'seed.sql');
   if (fs.existsSync(seedPath)) {
     db.exec(fs.readFileSync(seedPath, 'utf8'));
     const sessions = db.prepare('SELECT COUNT(*) as c FROM sessions').get().c;

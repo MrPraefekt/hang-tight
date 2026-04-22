@@ -47,19 +47,8 @@ pids/
 *.pid
 *.seed
 
-# Terraform
-.terraform/
-*.tfstate
-*.tfstate.*
-*.tfvars
-!terraform.tfvars.example
-.terraform.lock.hcl
-
 # Database
 *.sql.backup
-*.pgsql
-*.db
-*.sqlite
 
 # Testing
 coverage/
