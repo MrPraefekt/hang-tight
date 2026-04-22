@@ -1,91 +1,107 @@
 # Deployment Guide
 
-This system is designed to run on a **Raspberry Pi** on your local network. The backend serves both the API and the built React frontend as static files.
+The Pi pulls code from **GitHub** — no direct network connection between your dev machine and the Pi is needed. You push to git, the Pi pulls and rebuilds.
 
 ## Architecture
 
 ```
-Development Machine                  Raspberry Pi
-┌────────────────┐    rsync         ┌────────────────────────┐
-│ make build     │ ────────────►   │ /opt/hang-tight/       │
-│ make deploy    │                  │   server.js            │
-└────────────────┘                  │   public/ (React)      │
-                                    │   data/  (SQLite DB)   │
-                                    │                        │
-                                    │ systemd: hangboard     │
-                                    │ http://<pi-ip>:3001    │
-                                    └────────────────────────┘
+Dev Machine          GitHub              Raspberry Pi
+┌──────────┐        ┌────────┐          ┌──────────────────────┐
+│ git push │──────►│  repo  │◄────────│ git pull             │
+└──────────┘        └────────┘          │ npm run build        │
+                                        │ systemctl restart    │
+                                        │                      │
+                                        │ /opt/hang-tight/     │
+                                        │   backend/server.js  │
+                                        │   backend/public/    │
+                                        │   backend/data/*.db  │
+                                        │                      │
+                                        │ http://<pi-ip>:3001  │
+                                        └──────────────────────┘
 ```
 
 ---
 
-## Prerequisites
+## Initial Pi Setup (one time)
 
-- Raspberry Pi (any model with WiFi or Ethernet)
-- Raspberry Pi OS (Lite is fine)
-- SSH access to the Pi
-- Your dev machine on the same network
+### What you need
 
----
+- Raspberry Pi with Raspberry Pi OS (Lite is fine)
+- Keyboard + monitor **or** SSH access (e.g. from a Windows laptop on the same network)
+- The Pi needs internet access (to clone from GitHub and install Node.js)
 
-## Phase 1: One-Time Pi Setup
+### Steps
 
-Configure `PI_HOST` and `PI_USER` in the Makefile (or pass as env vars):
+1. **Connect to the Pi** — plug in keyboard/monitor, or SSH from a Windows machine:
+   ```
+   ssh pi@<pi-ip-address>
+   ```
+   (Default password is `raspberry` — change it with `passwd`)
 
-```bash
-make pi-setup PI_HOST=192.168.1.50 PI_USER=pi
-```
+2. **Run the setup script**:
+   ```bash
+   curl -fsSL https://raw.githubusercontent.com/mrpraefekt/hang-tight/main/deploy/setup-pi.sh | bash
+   ```
 
-This will:
+   This will:
+   - Install Node.js 20 and Git
+   - Clone the repo to `/opt/hang-tight`
+   - Install dependencies
+   - Build the frontend
+   - Seed the database with sample data
+   - Set up and start the systemd service
 
-1. Install Node.js 20 on the Pi
-2. Create `/opt/hang-tight/` directory
-3. Copy the `hangboard.service` systemd unit
-4. Enable the service
+3. **Verify it's running**:
+   ```bash
+   sudo systemctl status hangboard
+   curl http://localhost:3001/health
+   ```
 
-### Manual Setup (if you prefer)
-
-```bash
-# On the Pi:
-curl -fsSL https://deb.nodesource.com/setup_20.x | sudo bash -
-sudo apt-get install -y nodejs
-sudo mkdir -p /opt/hang-tight/data
-sudo chown -R pi:pi /opt/hang-tight
-
-# Copy systemd service
-sudo cp deploy/hangboard.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable hangboard
-```
-
----
-
-## Phase 2: Deploy
-
-```bash
-make deploy
-```
-
-This will:
-
-1. Build the frontend (`npm run build` → `backend/public/`)
-2. rsync the backend (excluding `node_modules`, `.env`, `*.db`) to the Pi
-3. Run `npm install --production` on the Pi
-4. Restart the `hangboard` systemd service
-
-After deploy, open: `http://<pi-ip>:3001`
-
-### Quick Deploy (skip npm install)
-
-```bash
-make deploy-quick
-```
-
-Use this for code-only changes when dependencies haven't changed.
+4. **Open in browser** from any device on the same network:
+   ```
+   http://<pi-ip>:3001
+   ```
 
 ---
 
-## Phase 3: ESP32 Configuration
+## Deploying Updates
+
+### Option A: SSH to Pi and run deploy script
+
+From any machine that can reach the Pi:
+
+```bash
+ssh pi@<pi-ip>
+cd /opt/hang-tight
+./deploy/deploy.sh           # full deploy (pull + build + npm install + restart)
+./deploy/deploy.sh --quick   # skip npm install (code-only changes)
+```
+
+### Option B: From your dev machine (if SSH works)
+
+```bash
+make deploy                  # git push + SSH trigger deploy on Pi
+make deploy-quick            # same, but skip npm install on Pi
+```
+
+### Option C: Auto-deploy via cron (Pi polls GitHub)
+
+Add a cron job on the Pi that checks for new commits every 2 minutes:
+
+```bash
+crontab -e
+```
+
+Add this line:
+```
+*/2 * * * * cd /opt/hang-tight && git fetch origin --quiet && [ "$(git rev-parse HEAD)" != "$(git rev-parse origin/main)" ] && ./deploy/deploy.sh >> /tmp/hang-tight-deploy.log 2>&1
+```
+
+With this, just `git push` from your dev machine and the Pi picks it up automatically.
+
+---
+
+## ESP32 Configuration
 
 Update `firmware/platformio.ini` with the Pi's IP:
 
@@ -93,12 +109,11 @@ Update `firmware/platformio.ini` with the Pi's IP:
 build_flags =
     -D WIFI_SSID="YourSSID"
     -D WIFI_PASSWORD="YourPassword"
-    -D WS_SERVER="192.168.1.50"
+    -D WS_SERVER="<pi-ip>"
     -D WS_PORT=3001
 ```
 
 Build and upload:
-
 ```bash
 cd firmware && pio run -t upload -e esp32
 ```
@@ -107,58 +122,62 @@ cd firmware && pio run -t upload -e esp32
 
 ## Operations
 
-### Service Management
+### Service management (on the Pi)
 
 ```bash
-make status           # systemctl status hangboard
-make logs             # journalctl -u hangboard -f
+sudo systemctl status hangboard        # check status
+sudo systemctl restart hangboard       # restart
+sudo journalctl -u hangboard -f        # live logs
 ```
 
-Or SSH directly:
+### Or via SSH from dev machine
 
 ```bash
-ssh pi@hang-tight.local
+make status PI_HOST=<pi-ip>
+make logs PI_HOST=<pi-ip>
+```
+
+### Database
+
+```bash
+# On the Pi
+sqlite3 /opt/hang-tight/backend/data/hangboard.db "SELECT COUNT(*) FROM sessions;"
+
+# Re-seed (destroys existing data)
+cd /opt/hang-tight/backend
+rm -f data/hangboard.db data/hangboard.db-wal
+node scripts/init-db.js --seed
 sudo systemctl restart hangboard
-sudo journalctl -u hangboard -f --no-pager
-```
-
-### Pull Data from Pi
-
-```bash
-make pull-data        # copies hangboard.db to data/hangboard-pi.db
-make pull-csv         # exports sessions, samples, calibration as CSV
-```
-
-### Database on Pi
-
-```bash
-ssh pi@hang-tight.local
-sqlite3 /opt/hang-tight/data/hangboard.db "SELECT COUNT(*) FROM sessions;"
 ```
 
 ---
 
 ## Backup
 
-The SQLite database is a single file. Back it up with:
+The SQLite database is a single file at `backend/data/hangboard.db`.
 
 ```bash
-make pull-data        # rsync from Pi to local
-# or:
-scp pi@hang-tight.local:/opt/hang-tight/data/hangboard.db ./backup-$(date +%Y%m%d).db
+# From the Pi
+cp /opt/hang-tight/backend/data/hangboard.db ~/backup-$(date +%Y%m%d).db
+
+# From dev machine (if SSH works)
+scp pi@<pi-ip>:/opt/hang-tight/backend/data/hangboard.db ./backup.db
 ```
 
 ---
 
-## Post-Deployment Checklist
+## Finding the Pi's IP Address
 
-- [ ] Frontend loads at `http://<pi-ip>:3001`
-- [ ] WebSocket connection shows "Connected"
-- [ ] Simulation mode works
-- [ ] ESP32 connects and streams data
-- [ ] Sessions can be started/stopped
-- [ ] Calibration can be saved/loaded
-- [ ] Historical data displays correctly
+On the Pi:
+```bash
+hostname -I
+```
+
+Or from another device on the same network:
+```bash
+ping raspberrypi.local       # default hostname
+ping hang-tight.local        # if you renamed it
+```
 
 ---
 
@@ -166,10 +185,9 @@ scp pi@hang-tight.local:/opt/hang-tight/data/hangboard.db ./backup-$(date +%Y%m%
 
 See [TROUBLESHOOTING.md](TROUBLESHOOTING.md) for common issues.
 
-**Service won't start**: Check `make logs` for errors. Common causes:
-
-- Missing `node_modules` — run `make deploy` (not `deploy-quick`)
-- Port 3001 already in use
-- Permissions on `/opt/hang-tight/data/`
-
-**Can't reach Pi**: Verify network connectivity with `ping hang-tight.local`. Check that the Pi is on and connected to the same network.
+| Problem | Fix |
+|---------|-----|
+| Service won't start | `sudo journalctl -u hangboard -n 50` to check logs |
+| `git pull` fails | Check internet: `ping github.com` |
+| Port 3001 not reachable | Check firewall: `sudo ufw status`, or just `sudo ufw allow 3001` |
+| Permission denied | `sudo chown -R pi:pi /opt/hang-tight` |
