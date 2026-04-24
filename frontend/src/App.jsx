@@ -5,7 +5,7 @@ import SessionManager from './components/SessionManager'
 import HistoricalData from './components/HistoricalData'
 import SimulationPanel from './components/SimulationPanel'
 
-const MAX_MEASUREMENTS = 500;
+const MAX_MEASUREMENTS = 6000;
 const WS_RECONNECT_DELAY = 3000;
 const BUILD_CHECK_INTERVAL = 5000;
 
@@ -153,7 +153,8 @@ export default function App() {
   }
 
   function handleMeasurement(data) {
-    const { timestamp, raw, force } = data
+    const { raw, force } = data
+    const timestamp = Date.now()
     
     setCurrentForce(force)
     setPeakForce(prev => Math.max(prev, force))
@@ -285,7 +286,6 @@ export default function App() {
         measurements={measurements}
         sessionActive={sessionActive}
         simulationActive={simulationActive}
-        maxPoints={MAX_MEASUREMENTS}
       />
 
       <div className="grid grid-2">
