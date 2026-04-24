@@ -11,12 +11,13 @@
 #include <WebSocketsClient.h>
 #include <ArduinoJson.h>
 #include "HX711.h"
+#include "config.h"
 
-// WiFi Configuration
-const char* ssid = "YOUR_SSID";
-const char* password = "YOUR_PASSWORD";
-const char* ws_server = "YOUR_BACKEND_URL";
-const int ws_port = 80;
+// WiFi Configuration (from config.h)
+const char* ssid = WIFI_SSID;
+const char* password = WIFI_PASSWORD;
+const char* ws_server = WS_SERVER;
+const int ws_port = WS_PORT;
 const char* ws_path = "/ws/esp";
 
 // HX711 Configuration
