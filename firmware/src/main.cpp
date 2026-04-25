@@ -180,43 +180,57 @@ void setup() {
   last_sample_us = micros();
   last_output_ms = millis();
   last_wifi_attempt_ms = millis();
+
+  // Dedicated FreeRTOS task for sampling + WebSocket at 80/20 Hz.
+  // Runs on Core 1 so it doesn't compete with WiFi on Core 0.
+  // vTaskDelayUntil yields the CPU between samples — no busy loop.
+  xTaskCreatePinnedToCore(
+    [](void*) {
+      const TickType_t sampleInterval = pdMS_TO_TICKS(1000 / SAMPLE_RATE_HZ);
+      TickType_t lastWake = xTaskGetTickCount();
+
+      for (;;) {
+        vTaskDelayUntil(&lastWake, sampleInterval);
+
+        // WebSocket housekeeping
+        if (wifi_connected && ws_started) {
+          webSocket.loop();
+        }
+
+        // Sample at 80 Hz
+        if (scale.is_ready()) {
+          int32_t raw = (int32_t)scale.read();
+          int32_t avg = add_sample(raw);
+
+          // Output at 20 Hz
+          unsigned long now_ms = millis();
+          if (now_ms - last_output_ms >= OUTPUT_INTERVAL_MS) {
+            last_output_ms = now_ms;
+            send_measurement((uint32_t)now_ms, avg);
+          }
+        }
+      }
+    },
+    "sample_task",
+    4096,
+    NULL,
+    1,      // priority
+    NULL,
+    1       // core 1
+  );
 }
 
 /*
- * Main loop - non-blocking
+ * Main loop — only handles WiFi reconnection
  */
 void loop() {
   unsigned long now_ms = millis();
 
-  // Maintain WebSocket connection (non-blocking)
-  if (wifi_connected && ws_started) {
-    webSocket.loop();
-  }
-  
-  // Reconnect WiFi with interval guard (non-blocking)
   if (!wifi_connected && (now_ms - last_wifi_attempt_ms >= WIFI_RECONNECT_INTERVAL_MS)) {
     last_wifi_attempt_ms = now_ms;
     Serial.println("Attempting WiFi reconnect...");
     WiFi.begin(ssid, password);
   }
-  
-  unsigned long now_us = micros();
-  
-  // Sample at 80 Hz
-  if (now_us - last_sample_us >= SAMPLE_INTERVAL_US) {
-    last_sample_us = now_us;
-    
-    if (scale.is_ready()) {
-      int32_t raw = (int32_t)scale.read();
-      int32_t avg = add_sample(raw);
-      
-      // Output at 20 Hz
-      if (now_ms - last_output_ms >= OUTPUT_INTERVAL_MS) {
-        last_output_ms = now_ms;
-        send_measurement((uint32_t)now_ms, avg);
-      }
-    }
-  }
-  
-  yield();
+
+  delay(1000);
 }

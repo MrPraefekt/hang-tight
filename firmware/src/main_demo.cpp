@@ -173,39 +173,52 @@ void setup() {
   last_output_ms      = millis();
   last_wifi_attempt_ms = millis();
   cycle_start_ms      = millis();
+
+  // Dedicated FreeRTOS task for measurement + WebSocket at 20 Hz.
+  // A task (unlike a timer) runs in normal thread context, so
+  // network I/O (webSocket.loop / sendTXT) is safe.
+  // vTaskDelay yields the CPU to other tasks and puts this one
+  // to sleep — no busy-waiting, no CPU burn.
+  xTaskCreatePinnedToCore(
+    [](void*) {
+      const TickType_t interval = pdMS_TO_TICKS(OUTPUT_INTERVAL_MS);
+      TickType_t lastWake = xTaskGetTickCount();
+
+      for (;;) {
+        // Precise 20 Hz tick — compensates for execution time
+        vTaskDelayUntil(&lastWake, interval);
+
+        // WebSocket housekeeping (process incoming, keep-alive)
+        if (wifi_connected && ws_started) {
+          webSocket.loop();
+        }
+
+        // Generate and send demo measurement
+        unsigned long now = millis();
+        int32_t raw = generate_demo_value(now);
+        send_measurement((uint32_t)now, raw);
+      }
+    },
+    "demo_task",  // name
+    4096,         // stack size (bytes)
+    NULL,         // parameter
+    1,            // priority (1 = low, above idle)
+    NULL,         // task handle
+    1             // core 1 (core 0 runs WiFi)
+  );
 }
 
 // ── Loop ────────────────────────────────────────────────────────────
+// With the FreeRTOS task handling everything, loop() is idle.
 void loop() {
-  unsigned long now_ms = millis();
-
-  // WebSocket housekeeping
-  if (wifi_connected && ws_started) {
-    webSocket.loop();
-  }
-
   // WiFi reconnect
+  unsigned long now_ms = millis();
   if (!wifi_connected && (now_ms - last_wifi_attempt_ms >= WIFI_RECONNECT_INTERVAL_MS)) {
     last_wifi_attempt_ms = now_ms;
     Serial.println("Attempting WiFi reconnect...");
     WiFi.begin(ssid, password);
   }
 
-  // Output at 20 Hz
-  if (now_ms - last_output_ms >= OUTPUT_INTERVAL_MS) {
-    last_output_ms = now_ms;
-
-    int32_t raw = generate_demo_value(now_ms);
-    
-    // Debug: show what generate_demo_value actually returns
-    float elapsed = (now_ms - cycle_start_ms) / 1000.0;
-    Serial.printf("elapsed=%.2f raw=%d cycle_start=%lu now=%lu\n", elapsed, raw, cycle_start_ms, now_ms);
-    
-    send_measurement((uint32_t)now_ms, raw);
-
-    // Also print to serial for debugging
-    Serial.printf("DEMO raw=%d  (≈%.1f kg)\n", raw, raw / 100.0);
-  }
-
-  yield();
+  // Let the CPU idle
+  delay(1000);
 }
