@@ -131,6 +131,7 @@ const wssClient = new WebSocketServer({ noServer: true });
 
 server.on('upgrade', (request, socket, head) => {
   const pathname = url.parse(request.url).pathname;
+  console.log(`WebSocket upgrade request: pathname="${pathname}" url="${request.url}"`);
 
   if (pathname === '/ws/esp') {
     wssEsp.handleUpgrade(request, socket, head, (ws) => {
