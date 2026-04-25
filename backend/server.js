@@ -275,8 +275,10 @@ function calibrateRaw(raw, calibration) {
 
 function processMeasurement(data) {
   const { timestamp, raw } = data;
+  console.log('ESP data:', JSON.stringify(data), 'raw type:', typeof raw);
 
   if (typeof timestamp !== 'number' || typeof raw !== 'number') {
+    console.log('REJECTED: bad types', typeof timestamp, typeof raw);
     return;
   }
 
