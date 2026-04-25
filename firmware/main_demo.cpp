@@ -141,13 +141,17 @@ void webSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
 void send_measurement(uint32_t timestamp_ms, int32_t raw) {
   if (!ws_connected) return;
 
-  StaticJsonDocument<96> doc;
+  JsonDocument doc;
   doc["timestamp"] = timestamp_ms;
   doc["raw"]       = raw;
 
   String json;
   serializeJson(doc, json);
   webSocket.sendTXT(json);
+
+  // Debug: print what we actually send
+  Serial.print("TX: ");
+  Serial.println(json);
 }
 
 // ── Setup ───────────────────────────────────────────────────────────
