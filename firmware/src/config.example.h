@@ -7,5 +7,5 @@
 
 #define WIFI_SSID     "YOUR_SSID"
 #define WIFI_PASSWORD  "YOUR_PASSWORD"
-#define WS_SERVER     "192.168.1.42"   // IP of machine running the backend
-#define WS_PORT       3000
+#define WS_SERVER     "192.168.178.39"   // IP of machine running the backend
+#define WS_PORT       3001
