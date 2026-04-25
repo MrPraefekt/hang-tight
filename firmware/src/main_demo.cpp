@@ -66,25 +66,24 @@ unsigned long cycle_start_ms      = 0;
  * calibration scale=1 and read centi-kg).
  */
 int32_t generate_demo_value(unsigned long now_ms) {
-  float elapsed = (now_ms - cycle_start_ms) / 1000.0;
-
-  // wrap around
-  if (elapsed >= CYCLE_SECONDS) {
-    cycle_start_ms = now_ms;
-    elapsed = 0.0;
-  }
+  // Use modulo for rock-solid cycle timing (no drift)
+  unsigned long cycle_pos_ms = now_ms % (unsigned long)(CYCLE_SECONDS * 1000);
+  float elapsed = cycle_pos_ms / 1000.0;
 
   float force_kg;
 
   if (elapsed < HANG_SECONDS) {
-    // Sine half-wave over the hang window
+    // Sine half-wave over the hang window, minimum at 0
     float phase = elapsed / HANG_SECONDS;           // 0 → 1
     float sine  = sin(phase * PI);                   // 0 → 1 → 0
-    force_kg = FORCE_MIN_KG + (FORCE_MAX_KG - FORCE_MIN_KG) * sine;
+    force_kg = FORCE_MAX_KG * sine;
   } else {
-    // Rest phase – near zero with small noise
-    force_kg = 0.2 + (random(0, 100) / 500.0);      // ~0.0–0.4 kg
+    // Rest phase – zero
+    force_kg = 0.0;
   }
+
+  // Clamp to zero minimum
+  if (force_kg < 0.0) force_kg = 0.0;
 
   // Return raw value scaled ×100 so integer has good resolution
   return (int32_t)(force_kg * 100.0);
