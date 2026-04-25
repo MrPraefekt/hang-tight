@@ -172,53 +172,32 @@ void setup() {
 
   last_output_ms      = millis();
   last_wifi_attempt_ms = millis();
-  cycle_start_ms      = millis();
-
-  // Dedicated FreeRTOS task for measurement + WebSocket at 20 Hz.
-  // A task (unlike a timer) runs in normal thread context, so
-  // network I/O (webSocket.loop / sendTXT) is safe.
-  // vTaskDelay yields the CPU to other tasks and puts this one
-  // to sleep — no busy-waiting, no CPU burn.
-  xTaskCreatePinnedToCore(
-    [](void*) {
-      const TickType_t interval = pdMS_TO_TICKS(OUTPUT_INTERVAL_MS);
-      TickType_t lastWake = xTaskGetTickCount();
-
-      for (;;) {
-        // Precise 20 Hz tick — compensates for execution time
-        vTaskDelayUntil(&lastWake, interval);
-
-        // WebSocket housekeeping (process incoming, keep-alive)
-        if (wifi_connected && ws_started) {
-          webSocket.loop();
-        }
-
-        // Generate and send demo measurement
-        unsigned long now = millis();
-        int32_t raw = generate_demo_value(now);
-        send_measurement((uint32_t)now, raw);
-      }
-    },
-    "demo_task",  // name
-    4096,         // stack size (bytes)
-    NULL,         // parameter
-    1,            // priority (1 = low, above idle)
-    NULL,         // task handle
-    1             // core 1 (core 0 runs WiFi)
-  );
 }
 
 // ── Loop ────────────────────────────────────────────────────────────
-// With the FreeRTOS task handling everything, loop() is idle.
 void loop() {
-  // WiFi reconnect
   unsigned long now_ms = millis();
+
+  // WebSocket housekeeping — must be called frequently
+  if (wifi_connected && ws_started) {
+    webSocket.loop();
+  }
+
+  // WiFi reconnect
   if (!wifi_connected && (now_ms - last_wifi_attempt_ms >= WIFI_RECONNECT_INTERVAL_MS)) {
     last_wifi_attempt_ms = now_ms;
     Serial.println("Attempting WiFi reconnect...");
     WiFi.begin(ssid, password);
   }
 
-  // Let the CPU idle
-  delay(1000);
+  // Send measurement at 20 Hz
+  if (now_ms - last_output_ms >= OUTPUT_INTERVAL_MS) {
+    last_output_ms = now_ms;
+    int32_t raw = generate_demo_value(now_ms);
+    send_measurement((uint32_t)now_ms, raw);
+  }
+
+  // Small sleep to reduce CPU heat — 5ms gives ~200 loop/s,
+  // plenty for 20 Hz output + responsive webSocket.loop()
+  delay(5);
 }
