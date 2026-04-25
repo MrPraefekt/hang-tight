@@ -197,6 +197,11 @@ void loop() {
     last_output_ms = now_ms;
 
     int32_t raw = generate_demo_value(now_ms);
+    
+    // Debug: show what generate_demo_value actually returns
+    float elapsed = (now_ms - cycle_start_ms) / 1000.0;
+    Serial.printf("elapsed=%.2f raw=%d cycle_start=%lu now=%lu\n", elapsed, raw, cycle_start_ms, now_ms);
+    
     send_measurement((uint32_t)now_ms, raw);
 
     // Also print to serial for debugging
